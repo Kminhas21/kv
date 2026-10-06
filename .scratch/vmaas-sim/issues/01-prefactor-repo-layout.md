@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Store and its tests live in an `internal/kv` package (package name `kv`, not `main`)
-- [ ] `go build ./...` and `go test ./...` succeed
-- [ ] Existing tests actually run (`go test -v` lists them)
+- [x] Store and its tests live in an `internal/kv` package (package name `kv`, not `main`)
+- [x] `go build ./...` and `go test ./...` succeed
+- [x] Existing tests actually run (`go test -v` lists them)
 
 **Concepts:** Go packages vs modules, the `internal/` visibility rule, the `cmd/<binary>` convention, exported vs unexported identifiers.
 

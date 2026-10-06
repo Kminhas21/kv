@@ -1,4 +1,4 @@
-package main
+package kv
 
 import (
 	"testing"
@@ -18,7 +18,7 @@ func TestStore_PutAndGet(t *testing.T) {
 	}
 }
 
-func AllTests(t *testing.T) {
+func TestStore_PutTable(t *testing.T) {
 	tests := []struct {
 		name    string
 		key     string
