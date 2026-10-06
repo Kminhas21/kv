@@ -15,21 +15,22 @@ Rule for today: **thin and working beats deep and broken.** If a step runs over 
 
 ## Today (~4.5–5h): end-to-end slice
 
-| # | Step | Who | Time box | Done when |
+| # | Ticket | Who | Blocked by | Time box |
 |---|---|---|---|---|
-| 01 | Repo layout, move store into `internal/kv` | agent | 10m | `go test ./...` green |
-| 02 | KV versions + CAS (`If-Match`, create-only, prefix list) | **you** | 35m | store tests for conflict/create-only/list pass |
-| 03 | WAL append + replay + torn tail | **you** | 30m | reopen-from-file test passes |
-| 04 | kv HTTP server (`cmd/kv`) + health | **you** | 30m | curl PUT/GET/409 work against `go run ./cmd/kv` |
-| 05 | kv client package | **you** | 20m | client round-trip test passes |
-| 06 | mockhv service + fault switches | agent | 20m | `curl` creates a task, it finishes after ~2s |
-| 07 | vmcli (CLI for manual testing) | agent | 15m | `vmcli kv list`, `vmcli hv vms` work |
-| 08 | VM domain types + repository + `POST/GET /vms` with idempotency | **you** | 40m | 202 with IDs; same key → same IDs |
-| 09 | Hosts seeding + first-fit scheduler with CAS reservation | **you** | 25m | VM gets a host_id; oversized VM stays Pending |
-| 10 | Reconciler: create path, lookup-before-create, timeout → UNKNOWN | **you** | 50m | `vmcli vm watch` shows Pending → Running |
-| 11 | System test harness + key scenario tests | agent scaffolds harness, **you** write 2 tests | 25m | idempotency + timeout-after-success tests green |
-| 12 | Dockerfile, kind config, manifests, Makefile | agent | 25m | all 3 pods Ready in `vmaas` namespace |
-| 13 | Cluster demo: create, dup POST, timeout-after-success, kill vmctl, kill kv | **you** run it | 20m | you can narrate each step from logs + vmcli |
+| 01 | Prefactor: repo layout | agent | none | 10m |
+| 02 | kv service over HTTP with versions | **you** | 01 | 35m |
+| 03 | Compare-and-swap (`If-Match`, create-only) | **you** | 02 | 20m |
+| 04 | Durability: WAL + replay | **you** | 03 | 30m |
+| 05 | kv Go client | **you** | 03 | 20m |
+| 06 | mockhv: fake hypervisor | agent | 01 | 20m |
+| 07 | vmcli skeleton + kv/hv commands | agent | 05, 06 | 15m |
+| 08 | Create-VM request path with idempotency | **you** | 05, 07 | 40m |
+| 09 | Scheduling: hosts + first-fit | **you** | 08 | 25m |
+| 10 | Provisioning: create + poll task | **you** | 06, 09 | 30m |
+| 11 | Provisioning: power on + observe → Running | **you** | 10 | 25m |
+| 12 | System test harness + recovery tests | agent harness, **you** tests | 11 | 25m |
+| 13 | Deploy to kind | agent | 11 | 25m |
+| 14 | Cluster demo script + rehearsal | agent script, **you** run | 12, 13 | 20m |
 
 **Checkpoint at end of today:** a VM gets created, scheduled and reconciled inside Kubernetes, with no duplicate VM even after a lost response or a killed controller.
 
@@ -39,26 +40,26 @@ If you finish early, pull from Week 1 in order.
 
 ## Week 1: complete the lifecycle
 
-| # | Step | Who |
-|---|---|---|
-| 14 | Stop / Start operations + 409 on concurrent op | you |
-| 15 | Delete operation + capacity release | you |
-| 16 | Migrate (reserve target → relocate → release source) | you |
-| 17 | Provider outage handling (observed UNKNOWN, desired untouched) + max attempts → FAILED | you |
-| 18 | Drift self-heal (out-of-band delete → recreate) | you |
-| 19 | Graceful shutdown (`signal.NotifyContext`, `http.Server.Shutdown`, drain reconciler) | you |
-| 20 | Retry backoff with jitter; WAL fsync option + measure cost | you |
+| # | Ticket | Who | Blocked by |
+|---|---|---|---|
+| 15 | Stop / Start + 409 on concurrent op | you | 12 |
+| 16 | Delete + capacity release | you | 15 |
+| 17 | Migrate | you | 16 |
+| 18 | Provider outage + max attempts → FAILED | you | 12 |
+| 19 | Drift self-heal | you | 18 |
+| 20 | Graceful shutdown | you | 11 |
+| 21 | Retry backoff + optional WAL fsync | you | 04, 18 |
 
 ## Week 2: production-shaped stretch (pick by interview value)
 
 | # | Step | Why it's worth it |
 |---|---|---|
-| 21 | 2 vmctl replicas + leader election via K8s Lease (client-go `leaderelection`) | Real K8s API usage. Explains why fencing matters. |
-| 22 | Prometheus `/metrics` (reconcile attempts, op duration, provider errors) + Grafana in kind | "Observability" in the JD |
-| 23 | Minimal Next.js page: VM list + create form + live status | JD's React/Next.js full-stack line |
-| 24 | Replace polling with a watch (kv `GET /watch?prefix=` long-poll/SSE) | How real controllers avoid polling |
-| 25 | Read-through: run KubeVirt on a Linux VM/WSL2 cluster, create one real VM | Seeing a real VM as a K8s object |
-| 26 | Placement policy: spread vs binpack scoring, anti-affinity groups | "Resource scheduling, placement decisions" |
+| W1 | 2 vmctl replicas + leader election via K8s Lease (client-go `leaderelection`) | Real K8s API usage. Explains why fencing matters. |
+| W2 | Prometheus `/metrics` (reconcile attempts, op duration, provider errors) + Grafana in kind | "Observability" in the JD |
+| W3 | Minimal Next.js page: VM list + create form + live status | JD's React/Next.js full-stack line |
+| W4 | Replace polling with a watch (kv `GET /watch?prefix=` long-poll/SSE) | How real controllers avoid polling |
+| W5 | Read-through: run KubeVirt on a Linux VM/WSL2 cluster, create one real VM | Seeing a real VM as a K8s object |
+| W6 | Placement policy: spread vs binpack scoring, anti-affinity groups | "Resource scheduling, placement decisions" |
 
 ---
 
