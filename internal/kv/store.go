@@ -2,9 +2,15 @@ package kv
 
 import (
 	"cmp"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
+)
+
+var (
+	ErrNotFound = errors.New("key not found")
+	ErrConflict = errors.New("version conflict")
 )
 
 type Entry struct {
@@ -35,24 +41,36 @@ func (s *Store) Get(key string) (value string, version uint64, ok bool) {
 	return e.Value, e.Version, ok
 }
 
-func (s *Store) Put(key, value string) (version uint64, created bool) {
+// Put writes value under key. If ifMatch is non-nil, the write only happens
+// when the key's current version equals *ifMatch; a missing key counts as
+// version 0, so *ifMatch == 0 means "create only". On conflict it returns
+// the current version and ErrConflict.
+func (s *Store) Put(key, value string, ifMatch *uint64) (version uint64, created bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, existed := s.data[key]
+	cur, existed := s.data[key]
+	if ifMatch != nil && *ifMatch != cur.Version {
+		return cur.Version, false, ErrConflict
+	}
 	s.revision++
 	s.data[key] = Entry{Value: value, Version: s.revision}
-	return s.revision, !existed
+	return s.revision, !existed, nil
 }
 
-func (s *Store) Delete(key string) bool {
+// Delete removes key, with the same ifMatch semantics as Put.
+func (s *Store) Delete(key string, ifMatch *uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.data[key]; !ok {
-		return false
+	cur, existed := s.data[key]
+	if ifMatch != nil && *ifMatch != cur.Version {
+		return ErrConflict
+	}
+	if !existed {
+		return ErrNotFound
 	}
 	s.revision++
 	delete(s.data, key)
-	return true
+	return nil
 }
 
 func (s *Store) List(prefix string) []Item {

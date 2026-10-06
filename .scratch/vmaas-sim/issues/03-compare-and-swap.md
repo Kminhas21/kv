@@ -4,12 +4,12 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Store Put/Delete accept an optional expected version; mismatch returns a typed conflict error
-- [ ] Expected version 0 succeeds only when the key does not exist
-- [ ] HTTP: `If-Match` header honored on PUT and DELETE; conflict → 409 with the current version in the body
-- [ ] Tests: stale write rejected, correct version accepted, create-only on existing key rejected
+- [x] Store Put/Delete accept an optional expected version; mismatch returns a typed conflict error
+- [x] Expected version 0 succeeds only when the key does not exist
+- [x] HTTP: `If-Match` header honored on PUT and DELETE; conflict → 409 with the current version in the body
+- [x] Tests: stale write rejected, correct version accepted, create-only on existing key rejected
 
 **Concepts:** optimistic concurrency, sentinel errors (`errors.New`, `errors.Is`), why the check and the write must happen under the same lock (check-then-act race).
 

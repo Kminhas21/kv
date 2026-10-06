@@ -9,15 +9,21 @@ import (
 	"testing"
 )
 
-func TestServer_PutGetDeleteList(t *testing.T) {
+// newTestServer starts the kv handler on a real local port and returns a
+// helper that sends one request with optional If-Match.
+func newTestServer(t *testing.T) func(method, path, body, ifMatch string) *http.Response {
+	t.Helper()
 	srv := httptest.NewServer(NewHandler(NewStore()))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
-	do := func(method, path, body string) *http.Response {
+	return func(method, path, body, ifMatch string) *http.Response {
 		t.Helper()
 		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if ifMatch != "" {
+			req.Header.Set("If-Match", ifMatch)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -25,6 +31,53 @@ func TestServer_PutGetDeleteList(t *testing.T) {
 		}
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
+	}
+}
+
+func TestServer_IfMatch(t *testing.T) {
+	send := newTestServer(t)
+
+	resp := send("PUT", "/keys/a", "v1", "0")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create-only on new key = %d, want 201", resp.StatusCode)
+	}
+	v1 := resp.Header.Get("ETag")
+
+	if resp = send("PUT", "/keys/a", "dup", "0"); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("create-only on existing key = %d, want 409", resp.StatusCode)
+	}
+
+	resp = send("PUT", "/keys/a", "v2", v1)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT with current version = %d, want 200", resp.StatusCode)
+	}
+	v2 := resp.Header.Get("ETag")
+
+	resp = send("PUT", "/keys/a", "lost update", v1)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("PUT with stale version = %d, want 409", resp.StatusCode)
+	}
+	if got := resp.Header.Get("ETag"); got != v2 {
+		t.Errorf("409 ETag = %q, want current version %q", got, v2)
+	}
+
+	if resp = send("DELETE", "/keys/a", "", v1); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("DELETE with stale version = %d, want 409", resp.StatusCode)
+	}
+	if resp = send("DELETE", "/keys/a", "", v2); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE with current version = %d, want 204", resp.StatusCode)
+	}
+
+	if resp = send("PUT", "/keys/a", "x", "not-a-number"); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad If-Match = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_PutGetDeleteList(t *testing.T) {
+	send := newTestServer(t)
+	do := func(method, path, body string) *http.Response {
+		t.Helper()
+		return send(method, path, body, "")
 	}
 
 	resp := do("PUT", "/keys/a", "hello")
