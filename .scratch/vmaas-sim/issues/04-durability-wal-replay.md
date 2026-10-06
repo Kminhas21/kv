@@ -4,13 +4,13 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Store opens from a WAL path (configurable via `WAL_PATH`)
-- [ ] Each Put/Delete appends one JSON line (op, key, value, version) before mutating memory
-- [ ] Replay restores data and the revision counter (next write's version > all replayed)
-- [ ] Corrupt/partial last line is skipped and logged
-- [ ] Tests: write → close → reopen same file → data present; torn tail tolerated
+- [x] Store opens from a WAL path (configurable via `WAL_PATH`)
+- [x] Each Put/Delete appends one JSON line (op, key, value, version) before mutating memory
+- [x] Replay restores data and the revision counter (next write's version > all replayed)
+- [x] Corrupt/partial last line is skipped and logged
+- [x] Tests: write → close → reopen same file → data present; torn tail tolerated
 
 **Concepts:** append-only logs, `os.OpenFile` flags, `bufio.Scanner` line reading, `json.Encoder`, `Close()` and `defer`, why "log first, then apply" matters, `t.TempDir()`.
 

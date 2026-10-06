@@ -12,7 +12,7 @@ import (
 func NewHandler(s *Store) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("PUT /keys/{key}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /keys/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		ifMatch, err := parseIfMatch(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -28,6 +28,10 @@ func NewHandler(s *Store) http.Handler {
 			writeConflict(w, version)
 			return
 		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		setVersion(w, version)
 		if created {
 			w.WriteHeader(http.StatusCreated)
@@ -36,7 +40,7 @@ func NewHandler(s *Store) http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	mux.HandleFunc("GET /keys/{key}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /keys/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		value, version, ok := s.Get(r.PathValue("key"))
 		if !ok {
 			http.Error(w, ErrNotFound.Error(), http.StatusNotFound)
@@ -46,7 +50,7 @@ func NewHandler(s *Store) http.Handler {
 		io.WriteString(w, value)
 	})
 
-	mux.HandleFunc("DELETE /keys/{key}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /keys/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		ifMatch, err := parseIfMatch(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -59,6 +63,8 @@ func NewHandler(s *Store) http.Handler {
 		case errors.Is(err, ErrConflict):
 			_, current, _ := s.Get(key)
 			writeConflict(w, current)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}

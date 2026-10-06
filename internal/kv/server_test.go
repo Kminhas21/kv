@@ -73,6 +73,22 @@ func TestServer_IfMatch(t *testing.T) {
 	}
 }
 
+func TestServer_KeysMayContainSlashes(t *testing.T) {
+	send := newTestServer(t)
+
+	if resp := send("PUT", "/keys/vms/web1", "v", ""); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT /keys/vms/web1 = %d, want 201", resp.StatusCode)
+	}
+	resp := send("GET", "/keys/vms/web1", "", "")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "v" {
+		t.Fatalf("GET /keys/vms/web1 = %d %q, want 200 \"v\"", resp.StatusCode, body)
+	}
+	if resp := send("DELETE", "/keys/vms/web1", "", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE /keys/vms/web1 = %d, want 204", resp.StatusCode)
+	}
+}
+
 func TestServer_PutGetDeleteList(t *testing.T) {
 	send := newTestServer(t)
 	do := func(method, path, body string) *http.Response {
