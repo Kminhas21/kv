@@ -4,15 +4,15 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Store tracks a global revision; each write's version = new revision; Get returns value + version
-- [ ] `PUT /keys/{key}` → 201 created / 200 updated, `ETag: <version>`
-- [ ] `GET /keys/{key}` → 200 + value + `ETag`, or 404
-- [ ] `DELETE /keys/{key}` → 204 or 404
-- [ ] `GET /keys?prefix=p` → JSON array `{key, value, version}` sorted by key
-- [ ] `GET /healthz` and `/readyz` → 200
-- [ ] Store-level tests for versions and prefix list; at least one `httptest` handler test
+- [x] Store tracks a global revision; each write's version = new revision; Get returns value + version
+- [x] `PUT /keys/{key}` → 201 created / 200 updated, `ETag: <version>`
+- [x] `GET /keys/{key}` → 200 + value + `ETag`, or 404
+- [x] `DELETE /keys/{key}` → 204 or 404
+- [x] `GET /keys?prefix=p` → JSON array `{key, value, version}` sorted by key
+- [x] `GET /healthz` and `/readyz` → 200
+- [x] Store-level tests for versions and prefix list; at least one `httptest` handler test
 
 **Concepts:** `net/http` ServeMux with method+path patterns (Go 1.22+), `r.PathValue`, writing status codes and headers, `encoding/json`, `httptest.NewRecorder`, why a *global* revision (etcd `mod_revision`) beats per-key counters.
 

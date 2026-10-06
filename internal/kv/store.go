@@ -1,53 +1,69 @@
 package kv
 
 import (
+	"cmp"
+	"slices"
+	"strings"
 	"sync"
-	"time"
 )
 
 type Entry struct {
-	Value     string
-	ExpiresAt time.Time
+	Value   string
+	Version uint64
+}
+
+type Item struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Version uint64 `json:"version"`
 }
 
 type Store struct {
-	store map[string]Entry
-	mu    sync.RWMutex
+	mu       sync.RWMutex
+	data     map[string]Entry
+	revision uint64
 }
 
 func NewStore() *Store {
-	return &Store{store: make(map[string]Entry)}
+	return &Store{data: make(map[string]Entry)}
 }
 
-func (s *Store) Get(key string) (string, bool) {
+func (s *Store) Get(key string) (value string, version uint64, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	value, ok := s.store[key]
-	return value.Value, ok
+	e, ok := s.data[key]
+	return e.Value, e.Version, ok
 }
 
-func (s *Store) Put(key string, value string) bool {
+func (s *Store) Put(key, value string) (version uint64, created bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.store[key]
-	s.store[key] = Entry{Value: value}
-	return ok
+	_, existed := s.data[key]
+	s.revision++
+	s.data[key] = Entry{Value: value, Version: s.revision}
+	return s.revision, !existed
 }
 
 func (s *Store) Delete(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.store[key]
-	delete(s.store, key)
-	return ok
+	if _, ok := s.data[key]; !ok {
+		return false
+	}
+	s.revision++
+	delete(s.data, key)
+	return true
 }
 
-func (s *Store) Keys() []string {
+func (s *Store) List(prefix string) []Item {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	keys := make([]string, 0, len(s.store))
-	for key := range s.store {
-		keys = append(keys, key)
+	items := []Item{}
+	for key, e := range s.data {
+		if strings.HasPrefix(key, prefix) {
+			items = append(items, Item{Key: key, Value: e.Value, Version: e.Version})
+		}
 	}
-	return keys
+	slices.SortFunc(items, func(a, b Item) int { return cmp.Compare(a.Key, b.Key) })
+	return items
 }
