@@ -4,7 +4,7 @@
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent (harness) → ready-for-human (tests)
+**Status:** resolved
 
 - [x] Harness helper with `t.Cleanup` teardown
 - [x] Test (you): same idempotency key twice → same IDs, 1 provider VM
