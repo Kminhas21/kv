@@ -15,11 +15,12 @@ import (
 // that restarts (or a brand new one) picks up exactly where the last left off.
 type Reconciler struct {
 	repo *Repo
+	hv   Hypervisor
 	now  func() time.Time
 }
 
-func NewReconciler(repo *Repo) *Reconciler {
-	return &Reconciler{repo: repo, now: time.Now}
+func NewReconciler(repo *Repo, hv Hypervisor) *Reconciler {
+	return &Reconciler{repo: repo, hv: hv, now: time.Now}
 }
 
 // Run calls Tick every interval until ctx is cancelled.
@@ -67,8 +68,157 @@ func (r *Reconciler) reconcileVM(ctx context.Context, v VM) error {
 	switch {
 	case v.DesiredPower == DesiredOn && v.HostID == "":
 		return r.schedule(ctx, v)
+	case v.DesiredPower == DesiredOn && v.ProviderVMID == "":
+		return r.provision(ctx, v)
 	}
 	return nil
+}
+
+// provision makes the VM exist on the hypervisor, one step per tick:
+//
+//  1. A saved task ID means a create is in flight: poll it, never re-create.
+//  2. Otherwise look up the hypervisor by external ID before creating. A hit
+//     means an earlier create succeeded but we never learned of it (lost
+//     response, or a crash before saving the task ID): adopt that VM.
+//  3. Only after a definite "not found" do we create, saving intent (op
+//     RUNNING) before the call and the task ID right after it.
+//
+// A create that errors without a definite rejection is marked UNKNOWN, not
+// FAILED: the VM may exist. Step 2 on the next tick finds out which.
+func (r *Reconciler) provision(ctx context.Context, v VM) error {
+	if v.CurrentOpID == "" {
+		return errors.New("vm needs provisioning but has no current operation")
+	}
+	op, err := r.repo.GetOp(ctx, v.CurrentOpID)
+	if err != nil {
+		return fmt.Errorf("load operation %s: %w", v.CurrentOpID, err)
+	}
+	log := slog.With("vm_id", v.ID, "op_id", op.ID, "external_id", v.ExternalID)
+
+	if op.ProviderTaskID != "" {
+		return r.pollCreate(ctx, v, op, log)
+	}
+
+	found, err := r.hv.FindByExternalID(ctx, v.ExternalID)
+	if err != nil {
+		log.Warn("hypervisor lookup failed; not creating until we can see", "step", "lookup", "err", err)
+		return r.noteError(ctx, v, "hypervisor unreachable: "+err.Error())
+	}
+	if len(found) > 0 {
+		if len(found) > 1 {
+			log.Error("duplicate VMs on hypervisor for one external ID", "count", len(found))
+		}
+		log.Info("adopting VM found on hypervisor", "step", "adopt", "provider_vm_id", found[0].ID)
+		return r.recordProviderVM(ctx, v, op, found[0].ID)
+	}
+
+	op.Status = OpRunning
+	op.Attempts++
+	op.LastError = ""
+	op.UpdatedAt = r.now().UTC()
+	if op, err = r.repo.UpdateOp(ctx, op); err != nil {
+		return ignoreConflict(op, err)
+	}
+	if v.Phase != PhaseProvisioning {
+		v.Phase = PhaseProvisioning
+		v.UpdatedAt = op.UpdatedAt
+		if v, err = r.repo.UpdateVM(ctx, v); err != nil {
+			return ignoreConflict(v, err)
+		}
+	}
+
+	taskID, err := r.hv.CreateVM(ctx, ProviderCreate{
+		ExternalID: v.ExternalID, Name: v.Name, CPU: v.CPU, MemoryMB: v.MemoryMB, HostID: v.HostID,
+	})
+	switch {
+	case errors.Is(err, ErrProviderRejected):
+		log.Error("hypervisor rejected create", "step", "create", "err", err)
+		return r.failOp(ctx, v, op, err.Error())
+	case err != nil:
+		log.Warn("create outcome unknown; will look up before retrying", "step", "create", "err", err)
+		op.Status = OpUnknown
+		op.LastError = err.Error()
+		op.UpdatedAt = r.now().UTC()
+		return ignoreConflict(r.repo.UpdateOp(ctx, op))
+	}
+
+	log.Info("create submitted", "step", "create", "provider_task_id", taskID, "host", v.HostID, "attempt", op.Attempts)
+	op.ProviderTaskID = taskID
+	op.UpdatedAt = r.now().UTC()
+	return ignoreConflict(r.repo.UpdateOp(ctx, op))
+}
+
+func (r *Reconciler) pollCreate(ctx context.Context, v VM, op Operation, log *slog.Logger) error {
+	log = log.With("provider_task_id", op.ProviderTaskID)
+	task, err := r.hv.GetTask(ctx, op.ProviderTaskID)
+	switch {
+	case errors.Is(err, ErrProviderNotFound):
+		// The hypervisor forgot the task (e.g. it restarted). Drop it and
+		// fall back to lookup-by-external-ID on the next tick.
+		log.Warn("hypervisor has no record of the task; will look up by external ID", "step", "poll")
+		op.ProviderTaskID = ""
+		op.UpdatedAt = r.now().UTC()
+		return ignoreConflict(r.repo.UpdateOp(ctx, op))
+	case err != nil:
+		log.Warn("polling task failed", "step", "poll", "err", err)
+		return r.noteError(ctx, v, "hypervisor unreachable: "+err.Error())
+	}
+
+	switch task.State {
+	case TaskRunning:
+		return nil
+	case TaskSucceeded:
+		log.Info("create task succeeded", "step", "poll", "provider_vm_id", task.VMID)
+		return r.recordProviderVM(ctx, v, op, task.VMID)
+	default:
+		log.Warn("create task failed; will retry", "step", "poll", "err", task.Error, "attempt", op.Attempts)
+		op.ProviderTaskID = ""
+		op.LastError = "create task failed: " + task.Error
+		op.UpdatedAt = r.now().UTC()
+		return ignoreConflict(r.repo.UpdateOp(ctx, op))
+	}
+}
+
+// recordProviderVM links the VM to the hypervisor's VM. The operation stays
+// RUNNING: the VM still has to be powered on (next ticket).
+func (r *Reconciler) recordProviderVM(ctx context.Context, v VM, op Operation, providerVMID string) error {
+	if op.Status != OpRunning || op.LastError != "" {
+		op.Status = OpRunning
+		op.LastError = ""
+		op.UpdatedAt = r.now().UTC()
+		if _, err := r.repo.UpdateOp(ctx, op); err != nil {
+			return ignoreConflict(op, err)
+		}
+	}
+	v.ProviderVMID = providerVMID
+	v.Phase = PhaseProvisioning
+	v.LastError = ""
+	v.UpdatedAt = r.now().UTC()
+	return ignoreConflict(r.repo.UpdateVM(ctx, v))
+}
+
+func (r *Reconciler) failOp(ctx context.Context, v VM, op Operation, reason string) error {
+	op.Status = OpFailed
+	op.LastError = reason
+	op.UpdatedAt = r.now().UTC()
+	if _, err := r.repo.UpdateOp(ctx, op); err != nil {
+		return ignoreConflict(op, err)
+	}
+	v.Phase = PhaseFailed
+	v.LastError = reason
+	v.UpdatedAt = op.UpdatedAt
+	return ignoreConflict(r.repo.UpdateVM(ctx, v))
+}
+
+// noteError records a transient problem on the VM without changing its
+// desired state or phase, and only writes when the message changes.
+func (r *Reconciler) noteError(ctx context.Context, v VM, msg string) error {
+	if v.LastError == msg {
+		return nil
+	}
+	v.LastError = msg
+	v.UpdatedAt = r.now().UTC()
+	return ignoreConflict(r.repo.UpdateVM(ctx, v))
 }
 
 // schedule reserves capacity on a host, then records the host on the VM.

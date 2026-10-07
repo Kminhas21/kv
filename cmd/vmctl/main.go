@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Kminhas21/kv/internal/hvclient"
 	"github.com/Kminhas21/kv/internal/kvclient"
 	"github.com/Kminhas21/kv/internal/vm"
 )
@@ -16,6 +17,8 @@ import (
 func main() {
 	addr := envOr("ADDR", ":8090")
 	kvAddr := envOr("KV_ADDR", "http://localhost:8080")
+	hvAddr := envOr("HV_ADDR", "http://localhost:8081")
+	hvTimeout := durationEnv("HV_TIMEOUT", 3*time.Second)
 	interval := durationEnv("RECONCILE_INTERVAL", 2*time.Second)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -28,9 +31,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	go vm.NewReconciler(repo).Run(ctx, interval)
+	hv := hvclient.New(hvAddr, hvTimeout)
+	go vm.NewReconciler(repo, hv).Run(ctx, interval)
 
-	slog.Info("vmctl listening", "addr", addr, "kv", kvAddr)
+	slog.Info("vmctl listening", "addr", addr, "kv", kvAddr, "hypervisor", hvAddr, "hv_timeout", hvTimeout)
 	if err := http.ListenAndServe(addr, vm.NewAPI(vm.NewService(repo))); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)

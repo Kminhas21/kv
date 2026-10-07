@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -40,6 +41,24 @@ func TestPickHost(t *testing.T) {
 		})
 	}
 }
+
+// offlineHypervisor fails every call, so in these scheduling-only tests the
+// provision step always stops at "could not look up, not creating".
+type offlineHypervisor struct{}
+
+var errOffline = errors.New("hypervisor offline (scheduler tests)")
+
+func (offlineHypervisor) CreateVM(context.Context, ProviderCreate) (string, error) {
+	return "", errOffline
+}
+func (offlineHypervisor) GetTask(context.Context, string) (ProviderTask, error) {
+	return ProviderTask{}, errOffline
+}
+func (offlineHypervisor) FindByExternalID(context.Context, string) ([]ProviderVM, error) {
+	return nil, errOffline
+}
+
+func (e *testEnv) reconciler() *Reconciler { return NewReconciler(e.repo, offlineHypervisor{}) }
 
 // seed replaces the default hosts with small ones that are easy to fill.
 func (e *testEnv) seed(hosts ...Host) {
@@ -92,7 +111,7 @@ func TestSchedule_PlacesPendingVMAndReserves(t *testing.T) {
 	e.seed(Host{ID: "host-a", CPUTotal: 4, MemoryMBTotal: 8192})
 	id := e.request("a", 2)
 
-	e.tick(NewReconciler(e.repo))
+	e.tick(e.reconciler())
 
 	v := e.vm(id)
 	if v.HostID != "host-a" || v.Phase != PhasePending || v.LastError != "" {
@@ -109,7 +128,7 @@ func TestSchedule_FillsThenSpills(t *testing.T) {
 	e.seed(Host{ID: "host-a", CPUTotal: 4, MemoryMBTotal: 8192}, Host{ID: "host-b", CPUTotal: 4, MemoryMBTotal: 8192})
 	ids := []string{e.request("1", 2), e.request("2", 2), e.request("3", 2)}
 
-	e.tick(NewReconciler(e.repo))
+	e.tick(e.reconciler())
 
 	count := map[string]int{}
 	for _, id := range ids {
@@ -124,7 +143,7 @@ func TestSchedule_TooBigStaysPendingThenFitsWhenCapacityAppears(t *testing.T) {
 	e := newEnv(t)
 	e.seed(Host{ID: "host-a", CPUTotal: 4, MemoryMBTotal: 8192})
 	id := e.request("big", 8)
-	r := NewReconciler(e.repo)
+	r := e.reconciler()
 
 	e.tick(r)
 	v := e.vm(id)
@@ -157,7 +176,7 @@ func TestSchedule_ReusesReservationLeftByCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e.tick(NewReconciler(e.repo))
+	e.tick(e.reconciler())
 
 	if got := e.vm(id).HostID; got != "host-b" {
 		t.Fatalf("host = %q, want host-b (reuse the reservation, don't reserve twice)", got)
@@ -178,7 +197,7 @@ func TestSchedule_ConcurrentSchedulersNeverOverbook(t *testing.T) {
 		ids = append(ids, e.request(fmt.Sprint(i), 2))
 	}
 
-	r := NewReconciler(e.repo)
+	r := e.reconciler()
 	for range 5 {
 		var wg sync.WaitGroup
 		for _, id := range ids {

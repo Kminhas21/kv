@@ -4,14 +4,14 @@
 
 **Blocked by:** 06, 09
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Hypervisor client *interface* in vmctl + HTTP implementation for mockhv (with `HV_TIMEOUT`)
-- [ ] Order per tick: lookup-by-external-ID → create → persist task ID → (next ticks) poll
-- [ ] Every state change persisted via CAS before the next step
-- [ ] Timeout (`context.DeadlineExceeded` / `net.Error` timeout) → op UNKNOWN, no retry create without lookup
-- [ ] Task error → attempts++, last_error set
-- [ ] slog line per step with vm_id, op_id, step, provider_task_id
+- [x] Hypervisor client *interface* in vmctl + HTTP implementation for mockhv (with `HV_TIMEOUT`)
+- [x] Order per tick: lookup-by-external-ID → create → persist task ID → (next ticks) poll
+- [x] Every state change persisted via CAS before the next step
+- [x] Timeout (`context.DeadlineExceeded` / `net.Error` timeout) → op UNKNOWN, no retry create without lookup
+- [x] Task error → attempts++, last_error set
+- [x] slog line per step with vm_id, op_id, step, provider_task_id
 
 **Concepts:** interfaces as seams (where govmomi/libvirt would plug in), "unknown ≠ failed," `errors.Is(err, context.DeadlineExceeded)`, step-at-a-time state machines that persist progress.
 
