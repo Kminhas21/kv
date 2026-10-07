@@ -4,12 +4,12 @@
 
 **Blocked by:** 05, 06
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Subcommand dispatch with stdlib `flag.NewFlagSet` per subcommand
-- [ ] kv commands use the ticket-05 client
-- [ ] hv commands show inventory as a readable table and set fault switches
-- [ ] Non-zero exit code + message on error
+- [x] Subcommand dispatch with stdlib `flag.NewFlagSet` per subcommand
+- [x] kv commands use the ticket-05 client
+- [x] hv commands show inventory as a readable table and set fault switches
+- [x] Non-zero exit code + message on error
 
 **Concepts (walkthrough):** `os.Args` dispatch, `flag.FlagSet`, `text/tabwriter`, exit codes, why this is a thin client over HTTP (same as `kubectl` over the apiserver).
 
