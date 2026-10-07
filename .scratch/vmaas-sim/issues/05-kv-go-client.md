@@ -4,12 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Client constructed with base URL and an `*http.Client` that has a timeout
-- [ ] All methods take `context.Context` as first argument
-- [ ] 404 → not-found error, 409 → conflict error, other non-2xx → error with status and body
-- [ ] Round-trip test against an `httptest.Server` running the real kv handler
+- [x] Client constructed with base URL and an `*http.Client` that has a timeout
+- [x] All methods take `context.Context` as first argument
+- [x] 404 → not-found error, 409 → conflict error, other non-2xx → error with status and body
+- [x] Round-trip test against an `httptest.Server` running the real kv handler
 
 **Concepts:** `context.Context` for cancellation and timeouts, `http.NewRequestWithContext`, always closing `resp.Body`, error wrapping (`fmt.Errorf("...: %w", err)`), why clients need timeouts (the default client has none!).
 
