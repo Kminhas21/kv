@@ -4,14 +4,14 @@
 
 **Blocked by:** 05, 07
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Domain types VM, Operation, IdempotencyRecord (fields per SPEC "Data model"), JSON-tagged
-- [ ] Repository over the kv client: create, get, list, update-with-CAS
-- [ ] Validation → 422 (cpu > 0, memory_mb > 0, name 1–63 chars)
-- [ ] Idempotency record claimed with create-only write *before* the VM is written; request hash compared on reuse
-- [ ] Missing `Idempotency-Key` → 400
-- [ ] Handler tests via `httptest` with a real kv behind it
+- [x] Domain types VM, Operation, IdempotencyRecord (fields per SPEC "Data model"), JSON-tagged
+- [x] Repository over the kv client: create, get, list, update-with-CAS
+- [x] Validation → 422 (cpu > 0, memory_mb > 0, name 1–63 chars)
+- [x] Idempotency record claimed with create-only write *before* the VM is written; request hash compared on reuse
+- [x] Missing `Idempotency-Key` → 400
+- [x] Handler tests via `httptest` with a real kv behind it
 
 **Concepts:** async API design (202 + operation resource), idempotency keys (Stripe-style), struct tags, ID generation (`crypto/rand` hex), hashing a request (`crypto/sha256`), keeping handlers thin over a repository.
 

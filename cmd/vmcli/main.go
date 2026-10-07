@@ -13,7 +13,13 @@ import (
 	"github.com/Kminhas21/kv/internal/kvclient"
 )
 
-const usage = `usage: vmcli [-kv URL] [-hv URL] <command> [flags] [args]
+const usage = `usage: vmcli [-vmctl URL] [-kv URL] [-hv URL] <command> [flags] [args]
+
+VMs (vmctl):
+  vm create -name N -cpu C -mem MB [-key K]   request a VM (prints the idempotency key)
+  vm list                                     list VMs
+  vm get <vm-id>                              show one VM in detail
+  op get <op-id>                              show an operation
 
 kv store:
   kv get <key>                        print a value (version goes to stderr)
@@ -28,7 +34,8 @@ mock hypervisor:
       -outage=true|false  -fail-rate 0.3  -create-delay 3s  -lost-responses N
   hv kill <vm-id>                     delete a VM out-of-band (simulates drift)
 
-Addresses default to $KV_ADDR / $HV_ADDR, else http://localhost:8080 / :8081.
+Addresses default to $VMCTL_ADDR / $KV_ADDR / $HV_ADDR,
+else http://localhost:8090 / :8080 / :8081.
 Flags must come before positional arguments.
 `
 
@@ -40,7 +47,8 @@ func (e usageError) Error() string { return e.msg }
 
 type app struct {
 	kv     *kvclient.Client
-	hv     *hvClient
+	hv     *jsonClient
+	vmctl  *jsonClient
 	out    io.Writer
 	errOut io.Writer
 }
@@ -68,6 +76,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(io.Discard)
 	kvAddr := fs.String("kv", envOr("KV_ADDR", "http://localhost:8080"), "kv base URL")
 	hvAddr := fs.String("hv", envOr("HV_ADDR", "http://localhost:8081"), "mockhv base URL")
+	vmctlAddr := fs.String("vmctl", envOr("VMCTL_ADDR", "http://localhost:8090"), "vmctl base URL")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
@@ -80,13 +89,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(rest) == 0 {
 		return usageError{"missing command"}
 	}
-	a := &app{kv: kvclient.New(*kvAddr), hv: newHVClient(*hvAddr), out: stdout, errOut: stderr}
+	a := &app{kv: kvclient.New(*kvAddr), hv: newJSONClient("mockhv", *hvAddr), vmctl: newJSONClient("vmctl", *vmctlAddr), out: stdout, errOut: stderr}
 
 	switch rest[0] {
 	case "kv":
 		return a.kvCmd(ctx, rest[1:])
 	case "hv":
 		return a.hvCmd(ctx, rest[1:])
+	case "vm":
+		return a.vmCmd(ctx, rest[1:])
+	case "op":
+		return a.opCmd(ctx, rest[1:])
 	case "help":
 		fmt.Fprint(stdout, usage)
 		return nil

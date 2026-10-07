@@ -16,18 +16,23 @@ import (
 	"github.com/Kminhas21/kv/internal/mockhv"
 )
 
-type hvClient struct {
+type jsonClient struct {
+	name string
 	base string
 	http *http.Client
 }
 
-func newHVClient(base string) *hvClient {
-	return &hvClient{base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: 5 * time.Second}}
+func newJSONClient(name, base string) *jsonClient {
+	return &jsonClient{name: name, base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: 5 * time.Second}}
 }
 
 // call sends body (if non-nil) as JSON and decodes a JSON response into out
 // (if non-nil). Any status >= 300 becomes an error carrying the body text.
-func (c *hvClient) call(ctx context.Context, method, path string, body, out any) error {
+func (c *jsonClient) call(ctx context.Context, method, path string, body, out any) error {
+	return c.callWithHeaders(ctx, method, path, body, out, nil)
+}
+
+func (c *jsonClient) callWithHeaders(ctx context.Context, method, path string, body, out any, headers map[string]string) error {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -40,6 +45,9 @@ func (c *hvClient) call(ctx context.Context, method, path string, body, out any)
 	if err != nil {
 		return err
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
@@ -48,7 +56,7 @@ func (c *hvClient) call(ctx context.Context, method, path string, body, out any)
 
 	if resp.StatusCode >= 300 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("%s %s: mockhv returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("%s %s: %s returned %d: %s", method, path, c.name, resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	if out == nil {
 		return nil
