@@ -12,6 +12,7 @@ const (
 	vmPrefix   = "vms/"
 	opPrefix   = "ops/"
 	idemPrefix = "idem/"
+	hostPrefix = "hosts/"
 )
 
 // Repo stores control-plane records as JSON in kv. Create is create-only and
@@ -33,6 +34,7 @@ type record[T any] interface {
 func (v *VM) setVersion(n uint64)                { v.Version = n }
 func (o *Operation) setVersion(n uint64)         { o.Version = n }
 func (r *IdempotencyRecord) setVersion(n uint64) { r.Version = n }
+func (h *Host) setVersion(n uint64)              { h.Version = n }
 
 func get[T any, P record[T]](ctx context.Context, c *kvclient.Client, key string) (T, error) {
 	var v T
@@ -110,6 +112,18 @@ func (r *Repo) UpdateOp(ctx context.Context, op Operation) (Operation, error) {
 
 func (r *Repo) GetIdempotency(ctx context.Context, key string) (IdempotencyRecord, error) {
 	return get[IdempotencyRecord](ctx, r.kv, idemPrefix+key)
+}
+
+func (r *Repo) ListHosts(ctx context.Context) ([]Host, error) {
+	return list[Host](ctx, r.kv, hostPrefix)
+}
+
+func (r *Repo) CreateHost(ctx context.Context, h Host) (Host, error) {
+	return put(ctx, r.kv, hostPrefix+h.ID, h, 0)
+}
+
+func (r *Repo) UpdateHost(ctx context.Context, h Host) (Host, error) {
+	return put(ctx, r.kv, hostPrefix+h.ID, h, h.Version)
 }
 
 // ClaimIdempotency stores rec only if no record exists for its key yet.

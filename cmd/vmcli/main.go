@@ -20,6 +20,7 @@ VMs (vmctl):
   vm list                                     list VMs
   vm get <vm-id>                              show one VM in detail
   op get <op-id>                              show an operation
+  hosts                                       show host capacity and placements
 
 kv store:
   kv get <key>                        print a value (version goes to stderr)
@@ -100,6 +101,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.vmCmd(ctx, rest[1:])
 	case "op":
 		return a.opCmd(ctx, rest[1:])
+	case "hosts":
+		return a.hostsCmd(ctx, rest[1:])
 	case "help":
 		fmt.Fprint(stdout, usage)
 		return nil

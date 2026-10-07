@@ -59,6 +59,15 @@ func NewAPI(svc *Service) http.Handler {
 		respondRecord(w, r, v, err, "vm")
 	})
 
+	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) {
+		hosts, err := svc.ListHosts(r.Context())
+		if err != nil {
+			serverError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, hosts)
+	})
+
 	mux.HandleFunc("GET /operations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		op, err := svc.GetOp(r.Context(), r.PathValue("id"))
 		respondRecord(w, r, op, err, "operation")

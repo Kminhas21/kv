@@ -4,14 +4,14 @@
 
 **Blocked by:** 08
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Host type with totals + reservations map; free capacity computed, not stored
-- [ ] Seeding uses create-only writes
-- [ ] Reservation is idempotent: reserving again for the same VM is a no-op
-- [ ] On CAS conflict: skip this VM this tick (re-read next tick), never overwrite
-- [ ] Reconciler runs `Tick` on a ticker in a goroutine, stopped via `context`
-- [ ] Tests: VM gets host_id after one Tick; oversized VM stays Pending; two VMs fill a host then spill to the next
+- [x] Host type with totals + reservations map; free capacity computed, not stored
+- [x] Seeding uses create-only writes
+- [x] Reservation is idempotent: reserving again for the same VM is a no-op
+- [x] On CAS conflict: skip this VM this tick (re-read next tick), never overwrite
+- [x] Reconciler runs `Tick` on a ticker in a goroutine, stopped via `context`
+- [x] Tests: VM gets host_id after one Tick; oversized VM stays Pending; two VMs fill a host then spill to the next
 
 **Concepts:** the reconcile loop shape, `time.NewTicker` + `select` on `ctx.Done()`, idempotent operations, why reserve-then-assign ordering is crash-safe here.
 

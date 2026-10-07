@@ -107,6 +107,41 @@ type Operation struct {
 	Version uint64 `json:"-"`
 }
 
+// Reservation is capacity held on a host for one VM.
+type Reservation struct {
+	CPU      int `json:"cpu"`
+	MemoryMB int `json:"memory_mb"`
+}
+
+// Host is a simulated hypervisor host, stored at hosts/{id}. Reservations
+// are keyed by VM ID, so reserving twice for the same VM is a no-op, and
+// free capacity is always computed from them, never stored separately
+// (a stored "free" number could drift out of sync with the reservations).
+type Host struct {
+	ID            string                 `json:"id"`
+	CPUTotal      int                    `json:"cpu_total"`
+	MemoryMBTotal int                    `json:"memory_mb_total"`
+	Reservations  map[string]Reservation `json:"reservations"`
+
+	Version uint64 `json:"-"`
+}
+
+// Free returns the CPU and memory not yet reserved.
+func (h Host) Free() (cpu, memoryMB int) {
+	cpu, memoryMB = h.CPUTotal, h.MemoryMBTotal
+	for _, r := range h.Reservations {
+		cpu -= r.CPU
+		memoryMB -= r.MemoryMB
+	}
+	return cpu, memoryMB
+}
+
+// Fits reports whether a VM with spec s could be placed here.
+func (h Host) Fits(s Spec) bool {
+	cpu, mem := h.Free()
+	return s.CPU <= cpu && s.MemoryMB <= mem
+}
+
 // IdempotencyRecord is stored at idem/{key}. It is written create-only
 // before anything else, so it decides which request "owns" the key.
 type IdempotencyRecord struct {

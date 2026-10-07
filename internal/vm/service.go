@@ -113,6 +113,26 @@ func (s *Service) CreateVM(ctx context.Context, idemKey string, spec Spec) (Crea
 	return CreateResult{VMID: rec.VMID, OperationID: rec.OpID}, nil
 }
 
+// HostView is a host plus its computed free capacity, for the API.
+type HostView struct {
+	Host
+	CPUFree      int `json:"cpu_free"`
+	MemoryMBFree int `json:"memory_mb_free"`
+}
+
+func (s *Service) ListHosts(ctx context.Context) ([]HostView, error) {
+	hosts, err := s.repo.ListHosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]HostView, len(hosts))
+	for i, h := range hosts {
+		cpu, mem := h.Free()
+		views[i] = HostView{Host: h, CPUFree: cpu, MemoryMBFree: mem}
+	}
+	return views, nil
+}
+
 func (s *Service) GetVM(ctx context.Context, id string) (VM, error) { return s.repo.GetVM(ctx, id) }
 
 func (s *Service) ListVMs(ctx context.Context) ([]VM, error) { return s.repo.ListVMs(ctx) }

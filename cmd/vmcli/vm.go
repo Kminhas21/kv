@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -89,6 +92,25 @@ func (a *app) vmCmd(ctx context.Context, args []string) error {
 	default:
 		return usageError{fmt.Sprintf("vm: unknown subcommand %q", sub)}
 	}
+}
+
+func (a *app) hostsCmd(ctx context.Context, args []string) error {
+	if _, err := parseSub(flag.NewFlagSet("hosts", flag.ContinueOnError), args, 0, 0, "hosts"); err != nil {
+		return err
+	}
+	var hosts []vm.HostView
+	if err := a.vmctl.call(ctx, http.MethodGet, "/hosts", nil, &hosts); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "HOST\tCPU USED/TOTAL\tMEM(MB) USED/TOTAL\tVMS")
+	for _, h := range hosts {
+		vms := slices.Sorted(maps.Keys(h.Reservations))
+		fmt.Fprintf(tw, "%s\t%d/%d\t%d/%d\t%s\n", h.ID,
+			h.CPUTotal-h.CPUFree, h.CPUTotal, h.MemoryMBTotal-h.MemoryMBFree, h.MemoryMBTotal,
+			dash(strings.Join(vms, ",")))
+	}
+	return tw.Flush()
 }
 
 func (a *app) opCmd(ctx context.Context, args []string) error {
