@@ -5,7 +5,7 @@ NS      := vmaas
 # Git Bash rewrites /unix/paths in arguments; this turns that off for docker/kubectl.
 export MSYS_NO_PATHCONV := 1
 
-.PHONY: test kind-up kind-down image load deploy redeploy up status logs forward wait
+.PHONY: test kind-up kind-down image load deploy redeploy up status logs forward wait demo
 
 test:
 	go vet ./...
@@ -44,6 +44,10 @@ up: kind-up load deploy wait status
 
 status:
 	kubectl -n $(NS) get pods,svc,pvc -o wide
+
+# Interactive walkthrough with self-checks; DEMO_AUTO=1 make demo runs unattended.
+demo:
+	bash scripts/demo.sh
 
 logs:
 	kubectl -n $(NS) logs -f deployment/vmctl
