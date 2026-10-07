@@ -4,14 +4,14 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Endpoints per SPEC "mockhv contract"
-- [ ] Tasks move queued → running → success/error over a configurable delay
-- [ ] Timeout-after-success: VM and task are recorded, then the response is delayed past the caller's timeout
-- [ ] Outage: every endpoint returns 503
-- [ ] Out-of-band delete removes a VM instantly
-- [ ] Structured logs for every request and task transition
+- [x] Endpoints per SPEC "mockhv contract"
+- [x] Tasks move queued → running → success/error over a configurable delay
+- [x] Timeout-after-success: VM and task are recorded, then the response is delayed past the caller's timeout
+- [x] Outage: every endpoint returns 503
+- [x] Out-of-band delete removes a VM instantly
+- [x] Structured logs for every request and task transition
 
 **Concepts (walkthrough):** goroutines + `time.AfterFunc` for async tasks, `sync.Mutex` around shared maps, why task-based APIs exist (long operations, HTTP request lifetimes).
 
