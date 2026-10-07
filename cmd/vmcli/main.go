@@ -19,6 +19,7 @@ VMs (vmctl):
   vm create -name N -cpu C -mem MB [-key K]   request a VM (prints the idempotency key)
   vm list                                     list VMs
   vm get <vm-id>                              show one VM in detail
+  vm watch [-until PHASE] [-timeout D] <vm-id>  print each state change live
   op get <op-id>                              show an operation
   hosts                                       show host capacity and placements
 

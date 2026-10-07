@@ -70,8 +70,146 @@ func (r *Reconciler) reconcileVM(ctx context.Context, v VM) error {
 		return r.schedule(ctx, v)
 	case v.DesiredPower == DesiredOn && v.ProviderVMID == "":
 		return r.provision(ctx, v)
+	case v.ProviderVMID != "":
+		return r.converge(ctx, v)
 	}
 	return nil
+}
+
+// observeRefresh is how long an unchanged observation may go unsaved. Without
+// it, every VM would be rewritten every tick just to move last_observed_at,
+// which for a large fleet means constant writes for no new information.
+const observeRefresh = 15 * time.Second
+
+// converge runs every tick for a VM that exists on the hypervisor:
+//
+//  1. If a power task is in flight, check whether it finished.
+//  2. Observe the hypervisor's view of the VM.
+//  3. Act only on a difference between desired and observed state, and
+//     complete the operation once they match.
+//
+// Whether a power-on worked is judged by observing the VM, not by trusting
+// the task result: observation is the ground truth.
+func (r *Reconciler) converge(ctx context.Context, v VM) error {
+	orig := v
+	now := r.now().UTC()
+	log := slog.With("vm_id", v.ID, "provider_vm_id", v.ProviderVMID)
+
+	var op *Operation
+	if v.CurrentOpID != "" {
+		o, err := r.repo.GetOp(ctx, v.CurrentOpID)
+		if err != nil {
+			return fmt.Errorf("load operation %s: %w", v.CurrentOpID, err)
+		}
+		op = &o
+		log = log.With("op_id", o.ID)
+	}
+
+	// 1. A power task in flight?
+	taskInFlight := false
+	if op != nil && op.ProviderTaskID != "" {
+		task, err := r.hv.GetTask(ctx, op.ProviderTaskID)
+		switch {
+		case err != nil && !errors.Is(err, ErrProviderNotFound):
+			v.ObservedPower, v.LastError = ObservedUnknown, "hypervisor unreachable: "+err.Error()
+			return r.saveStatus(ctx, orig, v)
+		case err == nil && task.State == TaskRunning:
+			taskInFlight = true
+		default:
+			if err == nil && task.State == TaskFailed {
+				log.Warn("power-on task failed; will retry", "step", "poll", "provider_task_id", task.ID, "err", task.Error)
+				op.LastError = "power-on task failed: " + task.Error
+			}
+			op.ProviderTaskID = ""
+			op.UpdatedAt = now
+			saved, err := r.repo.UpdateOp(ctx, *op)
+			if err != nil {
+				return ignoreConflict(saved, err)
+			}
+			op = &saved
+		}
+	}
+
+	// 2. Observe.
+	pv, err := r.hv.GetVM(ctx, v.ProviderVMID)
+	switch {
+	case errors.Is(err, ErrProviderNotFound):
+		if orig.ObservedPower != ObservedAbsent {
+			log.Warn("vm missing on hypervisor", "step", "observe")
+		}
+		v.ObservedPower, v.LastError = ObservedAbsent, "vm is missing on the hypervisor"
+		return r.saveStatus(ctx, orig, v)
+	case err != nil:
+		if orig.ObservedPower != ObservedUnknown {
+			log.Warn("observe failed; desired state unchanged", "step", "observe", "err", err)
+		}
+		v.ObservedPower, v.LastError = ObservedUnknown, "hypervisor unreachable: "+err.Error()
+		return r.saveStatus(ctx, orig, v)
+	}
+	v.ObservedPower, v.LastError = pv.Power, ""
+
+	// 3. Act.
+	switch {
+	case !pv.Ready:
+		// Still being built (e.g. adopted mid-create): nothing to do yet.
+
+	case v.DesiredPower == DesiredOn && pv.Power == ObservedOn:
+		v.Phase = PhaseRunning
+		if op != nil {
+			if op.Status != OpSucceeded {
+				op.Status, op.LastError, op.UpdatedAt = OpSucceeded, "", now
+				if _, err := r.repo.UpdateOp(ctx, *op); err != nil {
+					return ignoreConflict(*op, err)
+				}
+				log.Info("operation succeeded; vm running", "step", "converged",
+					"op_type", op.Type, "attempts", op.Attempts, "took", now.Sub(op.CreatedAt).Round(time.Millisecond))
+			}
+			v.CurrentOpID = ""
+		}
+
+	case v.DesiredPower == DesiredOn && pv.Power == ObservedOff && op != nil && !taskInFlight:
+		taskID, err := r.hv.PowerOn(ctx, pv.ID)
+		switch {
+		case errors.Is(err, ErrProviderBusy):
+			// The hypervisor says "not yet"; try again next tick.
+		case errors.Is(err, ErrProviderRejected):
+			log.Error("hypervisor rejected power-on", "step", "power-on", "err", err)
+			return r.failOp(ctx, v, *op, err.Error())
+		case err != nil:
+			log.Warn("power-on request failed; will retry", "step", "power-on", "err", err)
+			v.LastError = "power-on failed: " + err.Error()
+		default:
+			log.Info("power-on submitted", "step", "power-on", "provider_task_id", taskID)
+			op.ProviderTaskID, op.UpdatedAt = taskID, now
+			if _, err := r.repo.UpdateOp(ctx, *op); err != nil {
+				return ignoreConflict(*op, err)
+			}
+		}
+	}
+
+	return r.saveStatus(ctx, orig, v)
+}
+
+// saveStatus writes next only if something meaningful changed since orig, or
+// if a successful observation has not been saved for observeRefresh.
+// last_observed_at only moves on a successful observation: it answers "when
+// did we last actually see this VM?".
+func (r *Reconciler) saveStatus(ctx context.Context, orig, next VM) error {
+	now := r.now().UTC()
+	changed := next.ObservedPower != orig.ObservedPower ||
+		next.Phase != orig.Phase ||
+		next.LastError != orig.LastError ||
+		next.CurrentOpID != orig.CurrentOpID
+	seen := next.ObservedPower != ObservedUnknown
+	stale := seen && now.Sub(orig.LastObservedAt) >= observeRefresh
+	if !changed && !stale {
+		return nil
+	}
+	if seen {
+		next.LastObservedAt = now
+	}
+	next.UpdatedAt = now
+	return ignoreConflict(r.repo.UpdateVM(ctx, next))
 }
 
 // provision makes the VM exist on the hypervisor, one step per tick:
@@ -180,11 +318,13 @@ func (r *Reconciler) pollCreate(ctx context.Context, v VM, op Operation, log *sl
 }
 
 // recordProviderVM links the VM to the hypervisor's VM. The operation stays
-// RUNNING: the VM still has to be powered on (next ticket).
+// RUNNING (the VM still has to be powered on) and its task slot is cleared,
+// since the create task is done and the slot is next used for power-on.
 func (r *Reconciler) recordProviderVM(ctx context.Context, v VM, op Operation, providerVMID string) error {
-	if op.Status != OpRunning || op.LastError != "" {
+	if op.Status != OpRunning || op.LastError != "" || op.ProviderTaskID != "" {
 		op.Status = OpRunning
 		op.LastError = ""
+		op.ProviderTaskID = ""
 		op.UpdatedAt = r.now().UTC()
 		if _, err := r.repo.UpdateOp(ctx, op); err != nil {
 			return ignoreConflict(op, err)

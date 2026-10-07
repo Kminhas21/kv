@@ -4,12 +4,12 @@
 
 **Blocked by:** 10
 
-**Status:** ready-for-human
+**Status:** resolved
 
-- [ ] Observe step runs for every VM with a provider VM ID, every tick
-- [ ] Power-on submitted once; its task polled like create
-- [ ] Converged → op SUCCEEDED, phase Running, current_op_id cleared
-- [ ] Test: create → N ticks → Running with exactly 1 provider VM
+- [x] Observe step runs for every VM with a provider VM ID, every tick
+- [x] Power-on submitted once; its task polled like create
+- [x] Converged → op SUCCEEDED, phase Running, current_op_id cleared
+- [x] Test: create → N ticks → Running with exactly 1 provider VM
 
 **Concepts:** level-triggered vs edge-triggered control (we compare states every tick, we don't react to events), separating power state from guest readiness.
 

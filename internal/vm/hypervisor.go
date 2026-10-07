@@ -19,6 +19,13 @@ type Hypervisor interface {
 	// FindByExternalID lists hypervisor VMs carrying our stable external ID.
 	// An empty result is a definite "none"; an error is "could not ask".
 	FindByExternalID(ctx context.Context, externalID string) ([]ProviderVM, error)
+	// GetVM returns the hypervisor's current view of one VM, or
+	// ErrProviderNotFound if the hypervisor says it does not exist.
+	GetVM(ctx context.Context, providerVMID string) (ProviderVM, error)
+	// PowerOn starts an asynchronous power-on. Powering on a VM that is
+	// already on is harmless, so unlike CreateVM it is safe to retry blindly.
+	// Returns ErrProviderBusy while the VM is still being built.
+	PowerOn(ctx context.Context, providerVMID string) (taskID string, err error)
 }
 
 var (
@@ -27,6 +34,9 @@ var (
 	// ErrProviderRejected: the hypervisor refused the request as invalid. It
 	// definitely did nothing, and retrying the same request will not help.
 	ErrProviderRejected = errors.New("rejected by hypervisor")
+	// ErrProviderBusy: the hypervisor answered "not now" (e.g. the VM is
+	// still being built). Definite and harmless: try again later.
+	ErrProviderBusy = errors.New("hypervisor busy")
 )
 
 type ProviderCreate struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -89,9 +90,76 @@ func (a *app) vmCmd(ctx context.Context, args []string) error {
 		row("created", when(v.CreatedAt))
 		return tw.Flush()
 
+	case "watch":
+		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
+		until := fs.String("until", "", "exit 0 once the VM reaches this phase (e.g. Running)")
+		timeout := fs.Duration("timeout", 0, "give up after this long (exit 1)")
+		pos, err := parseSub(fs, args, 1, 1, "vm watch [-until PHASE] [-timeout D] <vm-id>")
+		if err != nil {
+			return err
+		}
+		if *timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
+		}
+		return a.watchVM(ctx, pos[0], vm.Phase(*until))
+
 	default:
 		return usageError{fmt.Sprintf("vm: unknown subcommand %q", sub)}
 	}
+}
+
+// watchVM polls a VM and prints one line whenever anything visible changes,
+// until ctx ends (Ctrl+C or -timeout) or the VM reaches the until phase.
+func (a *app) watchVM(ctx context.Context, id string, until vm.Phase) error {
+	start := time.Now()
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	fmt.Fprintf(a.errOut, "watching %s (Ctrl+C to stop)\n", id)
+
+	last := ""
+	for {
+		var v vm.VM
+		if err := a.vmctl.call(ctx, http.MethodGet, "/vms/"+url.PathEscape(id), nil, &v); err != nil {
+			if ctx.Err() != nil {
+				return a.watchEnded(ctx, until)
+			}
+			return err
+		}
+		opStatus := "-"
+		if v.CurrentOpID != "" {
+			var op vm.Operation
+			if a.vmctl.call(ctx, http.MethodGet, "/operations/"+url.PathEscape(v.CurrentOpID), nil, &op) == nil {
+				opStatus = fmt.Sprintf("%s %s (attempt %d)", op.Type, op.Status, op.Attempts)
+			}
+		}
+		line := fmt.Sprintf("phase=%-12s desired=%-3s observed=%-7s host=%-6s provider=%-7s op=%s",
+			v.Phase, v.DesiredPower, v.ObservedPower, dash(v.HostID), dash(v.ProviderVMID), opStatus)
+		if v.LastError != "" {
+			line += "  error=" + truncate(v.LastError, 60)
+		}
+		if line != last {
+			fmt.Fprintf(a.out, "+%5.1fs  %s\n", time.Since(start).Seconds(), line)
+			last = line
+		}
+		if until != "" && v.Phase == until {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return a.watchEnded(ctx, until)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *app) watchEnded(ctx context.Context, until vm.Phase) error {
+	if until != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("timed out before reaching phase %s", until)
+	}
+	return nil
 }
 
 func (a *app) hostsCmd(ctx context.Context, args []string) error {

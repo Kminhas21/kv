@@ -57,6 +57,10 @@ func (offlineHypervisor) GetTask(context.Context, string) (ProviderTask, error) 
 func (offlineHypervisor) FindByExternalID(context.Context, string) ([]ProviderVM, error) {
 	return nil, errOffline
 }
+func (offlineHypervisor) GetVM(context.Context, string) (ProviderVM, error) {
+	return ProviderVM{}, errOffline
+}
+func (offlineHypervisor) PowerOn(context.Context, string) (string, error) { return "", errOffline }
 
 func (e *testEnv) reconciler() *Reconciler { return NewReconciler(e.repo, offlineHypervisor{}) }
 

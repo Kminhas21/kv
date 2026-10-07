@@ -100,8 +100,8 @@ func TestProvision_CreatesOnHypervisorAndRecordsIt(t *testing.T) {
 		t.Errorf("vm phase %s host %q; want Provisioning on a host", v.Phase, v.HostID)
 	}
 	op := s.op(res.OperationID)
-	if op.Status != vm.OpRunning || op.ProviderTaskID == "" || op.Attempts != 1 {
-		t.Errorf("op = %+v; want RUNNING with a task ID after exactly 1 attempt", op)
+	if op.Status != vm.OpRunning || op.Attempts != 1 {
+		t.Errorf("op = %+v; want RUNNING (power-on still to come) after exactly 1 create attempt", op)
 	}
 	if n := s.providerVMs(v.ExternalID); n != 1 {
 		t.Fatalf("%d VMs on the hypervisor, want 1", n)
@@ -214,14 +214,13 @@ func TestProvision_RestartMidCreateResumesFromSavedTask(t *testing.T) {
 
 	first := s.newReconciler()
 	s.tickUntil(first, "task submitted", func() bool { return s.op(res.OperationID).ProviderTaskID != "" })
-	taskID := s.op(res.OperationID).ProviderTaskID
 
 	// "Kill" vmctl: throw the reconciler away and start a new one.
 	second := s.newReconciler()
 	s.tickUntil(second, "provisioned by the new reconciler", func() bool { return s.vm(res.VMID).ProviderVMID != "" })
 
-	if op := s.op(res.OperationID); op.ProviderTaskID != taskID || op.Attempts != 1 {
-		t.Errorf("op = %+v; want the original task %s polled, still 1 attempt", op, taskID)
+	if op := s.op(res.OperationID); op.Attempts != 1 {
+		t.Errorf("op attempts = %d; want 1: the new reconciler must poll the saved task, not create again", op.Attempts)
 	}
 	if n := s.providerVMs(s.vm(res.VMID).ExternalID); n != 1 {
 		t.Fatalf("%d VMs on the hypervisor, want 1", n)

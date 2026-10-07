@@ -72,6 +72,24 @@ func (c *Client) FindByExternalID(ctx context.Context, externalID string) ([]vm.
 	return out, nil
 }
 
+func (c *Client) GetVM(ctx context.Context, id string) (vm.ProviderVM, error) {
+	var v mockhv.VM
+	if err := c.call(ctx, http.MethodGet, "/vms/"+url.PathEscape(id), nil, &v); err != nil {
+		return vm.ProviderVM{}, err
+	}
+	return toProviderVM(v), nil
+}
+
+func (c *Client) PowerOn(ctx context.Context, id string) (string, error) {
+	var ref struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := c.call(ctx, http.MethodPost, "/vms/"+url.PathEscape(id)+"/power-on", nil, &ref); err != nil {
+		return "", err
+	}
+	return ref.TaskID, nil
+}
+
 func toProviderVM(v mockhv.VM) vm.ProviderVM {
 	power := vm.ObservedOff
 	if v.Power == mockhv.PowerOn {
@@ -85,6 +103,7 @@ func toProviderVM(v mockhv.VM) vm.ProviderVM {
 
 // call sends one JSON request and classifies the outcome:
 //   - 404               -> vm.ErrProviderNotFound (definite: it does not exist)
+//   - 409               -> vm.ErrProviderBusy     (definite: not now, try later)
 //   - other 4xx         -> vm.ErrProviderRejected (definite: nothing was done)
 //   - 5xx, timeouts,
 //     connection errors -> plain error (ambiguous: it may or may not have happened)
@@ -113,7 +132,9 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 		switch {
 		case resp.StatusCode == http.StatusNotFound:
 			return fmt.Errorf("%s: %w", detail, vm.ErrProviderNotFound)
-		case resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusConflict:
+		case resp.StatusCode == http.StatusConflict:
+			return fmt.Errorf("%s: %w", detail, vm.ErrProviderBusy)
+		case resp.StatusCode >= 400 && resp.StatusCode < 500:
 			return fmt.Errorf("%s: %w", detail, vm.ErrProviderRejected)
 		default:
 			return fmt.Errorf("%s", detail)
