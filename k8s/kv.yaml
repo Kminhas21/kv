@@ -1,0 +1,95 @@
+# kv is the system's database, so it runs as a StatefulSet, not a
+# Deployment. A StatefulSet gives each pod:
+#   - a stable name (kv-0, never kv-7d9f8-xk2p9),
+#   - its own PersistentVolumeClaim that follows that name across restarts,
+#   - stable DNS through the headless Service (kv-0.kv-headless...).
+# Delete pod kv-0 and Kubernetes recreates kv-0 with the same volume, so the
+# WAL (and every VM record) survives.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kv
+  namespace: vmaas
+spec:
+  serviceName: kv-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kv
+  template:
+    metadata:
+      labels:
+        app: kv
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: kv
+          image: vmaas-sim:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/kv"]
+          envFrom:
+            - configMapRef:
+                name: vmaas-config
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # Liveness: "is the process stuck?" Failing it restarts the container.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          # Readiness: "should it receive traffic?" Failing it removes the pod
+          # from the Service's endpoints without restarting it.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          # Requests are what the Kubernetes scheduler reserves on a node (like
+          # our host reservations); limits are the hard ceiling. Exceeding the
+          # memory limit gets the container OOM-killed; CPU is only throttled.
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Headless (clusterIP: None): no load-balancing IP, DNS returns the pod IPs
+# directly. Required by the StatefulSet for stable per-pod DNS names.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv-headless
+  namespace: vmaas
+spec:
+  clusterIP: None
+  selector:
+    app: kv
+  ports:
+    - name: http
+      port: 8080
+---
+# Normal Service: one stable virtual IP and DNS name ("kv") that routes to
+# whichever kv pod is Ready. This is what vmctl talks to.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kv
+  namespace: vmaas
+spec:
+  selector:
+    app: kv
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

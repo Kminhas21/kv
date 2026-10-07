@@ -4,12 +4,12 @@
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Multi-stage Dockerfile (static Go build → small runtime image, non-root)
-- [ ] Manifests in a k8s folder; namespace `vmaas`
-- [ ] Makefile targets: kind-up, image, load, deploy, forward, logs, kind-down
-- [ ] All pods Ready; `vmcli vm create` via port-forward reaches Running
+- [x] Multi-stage Dockerfile (static Go build → small runtime image, non-root)
+- [x] Manifests in a k8s folder; namespace `vmaas`
+- [x] Makefile targets: kind-up, image, load, deploy, forward, logs, kind-down
+- [x] All pods Ready; `vmcli vm create` via port-forward reaches Running
 
 **Concepts (walkthrough, line by line):** StatefulSet vs Deployment, volumeClaimTemplates/PVC/PV, headless Service + stable DNS, ClusterIP Services, ConfigMap → env, liveness vs readiness, requests vs limits, `imagePullPolicy` with kind-loaded images.
 

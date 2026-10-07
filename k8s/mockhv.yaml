@@ -1,0 +1,57 @@
+# The fake hypervisor. A Deployment: pods are interchangeable and get random
+# names. (It keeps its inventory in memory, so deleting this pod "loses" all
+# hypervisor VMs: a handy way to simulate a hypervisor that came back empty.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mockhv
+  namespace: vmaas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mockhv
+  template:
+    metadata:
+      labels:
+        app: mockhv
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: mockhv
+          image: vmaas-sim:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/mockhv"]
+          env:
+            - name: ADDR
+              value: ":8081"
+          envFrom:
+            - configMapRef:
+                name: vmaas-config
+          ports:
+            - name: http
+              containerPort: 8081
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mockhv
+  namespace: vmaas
+spec:
+  selector:
+    app: mockhv
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

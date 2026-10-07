@@ -1,0 +1,11 @@
+# A local Kubernetes cluster where each "node" is a Docker container.
+# One control plane (API server, etcd, scheduler, controllers) and two
+# workers, so you can watch the Kubernetes scheduler place pods on
+# different nodes, the same job our vmctl scheduler does for VMs.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vmaas
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

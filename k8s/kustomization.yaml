@@ -1,0 +1,9 @@
+# `kubectl apply -k k8s/` applies everything listed here, in this order.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - kv.yaml
+  - mockhv.yaml
+  - vmctl.yaml

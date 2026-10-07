@@ -1,0 +1,7 @@
+.git
+.scratch
+*.exe
+*.wal
+k8s
+docs
+*.md

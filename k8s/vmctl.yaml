@@ -1,0 +1,65 @@
+# The control plane: API + scheduler + reconciler. A Deployment, because it
+# holds no state of its own: everything is in kv. Kill it at any moment and
+# the replacement pod continues from kv.
+#
+# replicas: 1 on purpose. Two replicas would run two reconcilers; compare-
+# and-swap keeps that safe from overbooking, but they would race and waste
+# work. Production runs several with leader election (a Kubernetes Lease) so
+# only one reconciles at a time; see Week 2 in PLAN.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmctl
+  namespace: vmaas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vmctl
+  template:
+    metadata:
+      labels:
+        app: vmctl
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      # Kubernetes sends SIGTERM, waits this long, then SIGKILL. vmctl's
+      # signal.NotifyContext turns SIGTERM into a cancelled context.
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: vmctl
+          image: vmaas-sim:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/vmctl"]
+          env:
+            - name: ADDR
+              value: ":8090"
+          envFrom:
+            - configMapRef:
+                name: vmaas-config
+          ports:
+            - name: http
+              containerPort: 8090
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vmctl
+  namespace: vmaas
+spec:
+  selector:
+    app: vmctl
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

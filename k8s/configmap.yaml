@@ -1,0 +1,21 @@
+# Configuration lives outside the image. Pods read these as environment
+# variables (envFrom), which is exactly what each main.go's envOr() reads.
+# Change a value, then restart the pods to pick it up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vmaas-config
+  namespace: vmaas
+data:
+  # Service DNS names: "kv" resolves to the kv Service's cluster IP from any
+  # pod in this namespace (full name: kv.vmaas.svc.cluster.local).
+  KV_ADDR: "http://kv:8080"
+  HV_ADDR: "http://mockhv:8081"
+
+  WAL_PATH: "/data/kv.wal"
+  RECONCILE_INTERVAL: "2s"
+  # HV_TIMEOUT must be shorter than HANG_FOR, or a "lost response" would
+  # simply be a slow response.
+  HV_TIMEOUT: "3s"
+  TASK_DELAY: "2s"
+  HANG_FOR: "10s"

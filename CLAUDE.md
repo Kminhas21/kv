@@ -14,7 +14,9 @@ Learning project: prep for a VM-as-a-Service internship (Go, Kubernetes, VM life
 - `go test ./...` runs unit tests and the in-process system harness
 - `go run ./cmd/kv`, `go run ./cmd/mockhv`, `go run ./cmd/vmctl` run the services locally
 - `go run ./cmd/vmcli ...` is the manual-testing CLI
-- `make kind-up`, `make deploy`, `make demo` run the cluster workflow (see Makefile)
+- `make up` creates the kind cluster, builds and loads the image, deploys, waits for Ready
+- `make redeploy` after code changes; `make status`, `make logs`, `make forward` (port-forwards for vmcli); `make kind-down`
+- In Git Bash, set `MSYS_NO_PATHCONV=1` before docker/kubectl commands that take /unix/paths (the Makefile does this)
 
 ## Agent skills
 

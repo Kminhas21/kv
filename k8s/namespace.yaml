@@ -1,0 +1,6 @@
+# A namespace groups everything for this app: names only need to be unique
+# inside it, and `kubectl delete namespace vmaas` removes it all at once.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vmaas
