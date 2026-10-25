@@ -131,10 +131,11 @@ pause
 # ---------------------------------------------------------------------------
 bold "4. Crash the control plane in the middle of provisioning"
 say "We slow the hypervisor down (create takes ~10s), request a VM, wait until a"
-say "create task is in flight, then force-kill the vmctl LEADER (no graceful exit,"
-say "like a node crash, so it never releases its lease). Another replica takes the"
-say "lease once it expires (LEASE_TTL 10s). Because every step was saved in kv, the"
-say "new leader polls the saved task instead of creating again."
+say "create task is in flight, then SIGKILL the vmctl LEADER's process on its node"
+say "(a real crash: no SIGTERM, so it never releases its lease; kubectl's force-"
+say "delete would still send SIGTERM). The lease must expire first (LEASE_TTL 10s),"
+say "then a replica takes it: another pod, or the restarted one. Because every step"
+say "was saved in kv, the new leader polls the saved task instead of creating again."
 run hv faults -create-delay 8s
 create "demo-crash-$RUN"
 CRASH=$VM CRASH_OP=$OP
@@ -145,13 +146,22 @@ for _ in $(seq 1 30); do
 done
 say "create task in flight: $TASK"
 OLD_POD=$(leader)
-printf '\033[36m$ kubectl -n %s delete pod %s --grace-period=0 --force\033[0m\n' "$NS" "$OLD_POD"
-kubectl -n "$NS" delete pod "$OLD_POD" --grace-period=0 --force 2>/dev/null
+NODE=$(kubectl -n "$NS" get pod "$OLD_POD" -o jsonpath='{.spec.nodeName}')
+CID=$(kubectl -n "$NS" get pod "$OLD_POD" -o jsonpath='{.status.containerStatuses[0].containerID}')
+PID=$(docker exec "$NODE" crictl inspect --output go-template --template '{{.info.pid}}' "${CID#containerd://}")
+printf '\033[36m$ docker exec %s kill -9 %s   # vmctl in %s\033[0m\n' "$NODE" "$PID" "$OLD_POD"
+docker exec "$NODE" kill -9 "$PID"
 START=$SECONDS
-wait_new_leader "$OLD_POD" 60
-NEW_POD=$NEW_LEADER
-say "old leader: $OLD_POD   new leader: $NEW_POD (after ~$((SECONDS - START))s, waiting out the TTL)"
-check "another replica took the lease after the crash" test -n "$NEW_POD" -a "$NEW_POD" != "$OLD_POD"
+NEW_POD=
+for _ in $(seq 1 120); do # first "became leader" logged by any replica since the kill
+	LINE=$(kubectl -n "$NS" logs -l app=vmctl --prefix --max-log-requests 5 --since="$((SECONDS - START + 1))s" 2>/dev/null | grep -m1 "became leader")
+	[[ -n "$LINE" ]] && NEW_POD=$(sed -E 's#^\[pod/([^/]+)/.*#\1#' <<<"$LINE") && break
+	sleep 0.5
+done
+TOOK=$((SECONDS - START))
+say "old leader: $OLD_POD   new leader: $NEW_POD (after ~${TOOK}s)"
+check "a replica took the lease after the crash" test -n "$NEW_POD"
+check "it had to wait for the TTL (a crashed leader releases nothing)" test "$TOOK" -ge 5
 wait_ready deployment/vmctl vmctl
 # vmcli's watch exits on the first connection error (vmctl just restarted), so
 # poll the phase ourselves instead of trusting a single watch.
@@ -166,7 +176,7 @@ wait_phase() { # wait_phase VM PHASE TIMEOUT_SECONDS
 vmcli vm watch -until Running -timeout 90s "$CRASH" 2>/dev/null
 check "VM reached Running after the crash" wait_phase "$CRASH" Running 90
 check "exactly 1 VM on the hypervisor" test "$(hv_count "$CRASH")" -eq 1
-check "still only 1 create attempt (the new pod polled the saved task)" test "$(op_field "$CRASH_OP" attempts)" = 1
+check "still only 1 create attempt (the new leader polled the saved task)" test "$(op_field "$CRASH_OP" attempts)" = 1
 say "What the NEW leader logged for this VM (no 'create submitted' line):"
 kubectl -n "$NS" logs "$NEW_POD" | grep "$CRASH" | cut -c21- | sed -E 's/ (external_id|op_id)=[^ ]+//g'
 run hv faults -create-delay 0s >/dev/null
