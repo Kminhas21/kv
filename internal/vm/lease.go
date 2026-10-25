@@ -31,10 +31,15 @@ type Lease struct {
 	now   func() time.Time
 
 	mu       sync.Mutex
-	ver      uint64    // version of the key we hold; 0 = not leader
-	deadline time.Time // stop acting as leader at this time unless renewed
-	leading  bool      // what we last logged, so each gain and loss is logged once
+	ver      uint64     // version of the key we hold; 0 = not leader
+	deadline time.Time  // stop acting as leader at this time unless renewed
+	leading  bool       // what we last logged, so each gain and loss is logged once
+	onChange func(bool) // nil = none; called with l.mu held, so keep it trivial
 }
+
+// OnChange registers f to be called on every gain or loss of leadership.
+// Call it before Run.
+func (l *Lease) OnChange(f func(leading bool)) { l.onChange = f }
 
 // NewLease returns a follower. renew must be shorter than ttl.
 func NewLease(c *kvclient.Client, id string, ttl, renew time.Duration) *Lease {
@@ -60,6 +65,9 @@ func (l *Lease) note(leading bool, reason string) {
 		return
 	}
 	l.leading = leading
+	if l.onChange != nil {
+		l.onChange(leading)
+	}
 	if leading {
 		slog.Info("became leader", "lease", LeaseKey, "id", l.id, "ttl", l.ttl)
 	} else {
@@ -131,6 +139,9 @@ func (l *Lease) Release(ctx context.Context) {
 	}
 	held := l.ver
 	l.ver, l.leading = 0, false
+	if l.onChange != nil {
+		l.onChange(false)
+	}
 	// If-Match: if the key already expired and changed hands, this is a
 	// harmless conflict instead of deleting the new leader's lease.
 	if err := l.kv.Delete(ctx, LeaseKey, &held); err != nil {

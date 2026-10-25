@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,7 +11,17 @@ import (
 
 	"github.com/Kminhas21/kv/internal/mockhv"
 	"github.com/Kminhas21/kv/internal/serve"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// withMetrics adds /metrics (Go runtime and process metrics only: mockhv has
+// no domain metrics) so its pod can carry the same scrape annotations.
+func withMetrics(next http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.Handle("/", next)
+	return mux
+}
 
 func main() {
 	addr := envOr("ADDR", ":8081")
@@ -23,7 +34,7 @@ func main() {
 	hv := mockhv.New(mockhv.Config{TaskDelay: taskDelay, HangFor: hangFor})
 
 	slog.Info("mockhv listening", "addr", addr, "task_delay", taskDelay, "hang_for", hangFor)
-	if err := serve.Run(ctx, "mockhv", addr, hv.Handler()); err != nil {
+	if err := serve.Run(ctx, "mockhv", addr, withMetrics(hv.Handler())); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}

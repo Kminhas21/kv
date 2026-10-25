@@ -57,11 +57,15 @@ demo:
 logs:
 	kubectl -n $(NS) logs -f -l app=vmctl --prefix --max-log-requests 5
 
-# Makes vmctl, kv and mockhv reachable on localhost for vmcli. Runs until Ctrl+C.
+# Makes vmctl, kv and mockhv reachable on localhost for vmcli, plus Grafana
+# (:3000) and Prometheus (:9090). Runs until Ctrl+C.
 forward:
 	kubectl -n $(NS) port-forward svc/vmctl 8090:8090 & \
 	kubectl -n $(NS) port-forward svc/kv 8080:8080 & \
 	kubectl -n $(NS) port-forward svc/mockhv 8081:8081 & \
+	kubectl -n $(NS) port-forward svc/grafana 3000:3000 & \
+	kubectl -n $(NS) port-forward svc/prometheus 9090:9090 & \
+	echo "Grafana http://localhost:3000 (anonymous viewer)  Prometheus http://localhost:9090"; \
 	wait
 
 # ---- GKE Autopilot (COSTS MONEY: always run gke-down when done) ----

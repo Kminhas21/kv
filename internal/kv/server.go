@@ -96,10 +96,12 @@ func NewHandler(s *Store) http.Handler {
 		io.WriteString(w, "ok")
 	})
 
+	mux.Handle("GET /metrics", s.metrics.handler())
+
 	if os.Getenv("FAULTS") == "1" {
-		return withFaults(mux)
+		return s.metrics.instrument(withFaults(mux))
 	}
-	return mux
+	return s.metrics.instrument(mux)
 }
 
 // withFaults adds the fault-injection routes used by the self-heal demo.

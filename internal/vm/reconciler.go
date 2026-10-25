@@ -18,7 +18,14 @@ type Reconciler struct {
 	hv   Hypervisor
 	now  func() time.Time
 
-	isLeader func() bool // nil = always reconcile
+	isLeader func() bool                // nil = always reconcile
+	observe  func(time.Duration, error) // nil = no metrics
+}
+
+// Observe reports the duration and outcome of every tick Run executes.
+func (r *Reconciler) Observe(f func(time.Duration, error)) *Reconciler {
+	r.observe = f
+	return r
 }
 
 func NewReconciler(repo *Repo, hv Hypervisor) *Reconciler {
@@ -57,7 +64,12 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 func (r *Reconciler) runTick(ctx context.Context) {
 	// Detached from ctx so a shutdown lets the tick finish; 8s fits serve.ShutdownTimeout.
 	tickCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
-	if err := r.Tick(tickCtx); err != nil {
+	start := time.Now()
+	err := r.Tick(tickCtx)
+	if r.observe != nil {
+		r.observe(time.Since(start), err)
+	}
+	if err != nil {
 		slog.Error("reconcile tick failed", "err", err)
 	}
 	cancel()

@@ -94,6 +94,7 @@ type Store struct {
 	bw      *bufio.Writer // batch/always only: the flusher's buffer in front of wal
 	enc     *json.Encoder
 	syncWAL func() error // wal.Sync; a field so tests can inject a failure
+	metrics *metrics
 
 	// Group commit (batch/always). wake is nil in off mode.
 	wake    chan struct{} // cap 1: "the queue is non-empty"
@@ -113,7 +114,9 @@ type Store struct {
 
 // NewStore returns a memory-only store (nothing survives a restart).
 func NewStore() *Store {
-	return &Store{data: make(map[string]Entry), now: time.Now}
+	s := &Store{data: make(map[string]Entry), now: time.Now}
+	s.metrics = newMetrics(s)
+	return s
 }
 
 // Open returns a store backed by the WAL at path, loading the snapshot and
@@ -128,10 +131,12 @@ func Open(path string, mode FsyncMode, snapshotEvery uint64) (*Store, error) {
 	}
 	s := NewStore()
 	s.path, s.snapEvery = path, snapshotEvery
+	loadStart := time.Now()
 	current, err := s.load()
 	if err != nil {
 		return nil, err
 	}
+	s.metrics.replay.Set(time.Since(loadStart).Seconds())
 	// Reopened append-only for writing: on Windows an O_APPEND handle cannot
 	// truncate, so replay/repair uses its own read-write handle.
 	f, err := os.OpenFile(current, os.O_WRONLY|os.O_APPEND, 0)
@@ -419,7 +424,11 @@ func (s *Store) commitBatch(batch []commit) error {
 	if err := s.bw.Flush(); err != nil {
 		return fmt.Errorf("append to WAL: %w", err)
 	}
-	if err := s.syncWAL(); err != nil {
+	syncStart := time.Now()
+	err := s.syncWAL()
+	s.metrics.fsync.Observe(time.Since(syncStart).Seconds())
+	s.metrics.batch.Observe(float64(len(batch)))
+	if err != nil {
 		return fmt.Errorf("fsync WAL: %w", err)
 	}
 	return nil

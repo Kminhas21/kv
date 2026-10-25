@@ -44,7 +44,9 @@ func main() {
 	}
 
 	hv := hvclient.New(hvAddr, hvTimeout)
+	metrics := vm.NewMetrics()
 	lease := vm.NewLease(kvc, id, leaseTTL, leaseRenew)
+	lease.OnChange(metrics.SetLeader)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -53,12 +55,12 @@ func main() {
 	}()
 	go func() {
 		defer wg.Done()
-		vm.NewReconciler(repo, hv).LeaderOnly(lease.IsLeader).Run(ctx, interval)
+		vm.NewReconciler(repo, hv).LeaderOnly(lease.IsLeader).Observe(metrics.ObserveTick).Run(ctx, interval)
 	}()
 
 	slog.Info("vmctl listening", "addr", addr, "id", id, "kv", kvAddr, "hypervisor", hvAddr, "hv_timeout", hvTimeout,
 		"lease_ttl", leaseTTL, "lease_renew", leaseRenew)
-	err := serve.Run(ctx, "vmctl", addr, vm.NewAPI(vm.NewService(repo)))
+	err := serve.Run(ctx, "vmctl", addr, metrics.Handler(vm.NewAPI(vm.NewService(repo))))
 	stop() // if the server failed on its own, stop the reconciler too
 	wg.Wait()
 	// Only now: the reconciler has stopped and no renewal can recreate the key.
