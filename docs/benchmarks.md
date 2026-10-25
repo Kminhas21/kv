@@ -12,8 +12,12 @@ changes against each other, not for predicting production.
 Intel Core i9-14900HX (24 cores / 32 threads), Windows 11 Home 10.0.26300,
 Samsung MZVL41T0HBLB NVMe SSD (NTFS; WAL in `%TEMP%`), Go 1.26.5 windows/amd64.
 kv and kvbench ran on the same machine over loopback, as separately built
-binaries (`go build -o`), not `go run`. Nothing else was deliberately running,
-but this is a laptop; see the variance notes. No kind cluster involved.
+binaries (`go build -o`), not `go run`. A kind cluster under Docker Desktop (kv,
+vmctl and mockhv pods plus a demo script, owned by another task) was running
+concurrently on this machine during some or all of the recorded series; which
+minutes overlapped is unknown. That background load is the likely cause of the
+drift described below. **Re-run on an idle machine (Docker Desktop stopped)
+before quoting any number.**
 
 ### Results against targets
 
@@ -31,7 +35,7 @@ errors. **Errors: 0 in all 12 HTTP runs.**
 | (info) | fsync=off, `-reads 0` | 54.8K/s [53.3K-56.1K], p99 3.65ms | n/a |
 | (info) | fsync=always, `-reads 0` | 915/s [781-934], p99 198ms | n/a |
 | 1M replay < 3s | Open, WAL only, 1M records | 2.19s [2.14-2.47] | met (see variance) |
-| (info) | Open, snapshot (999K keys) + 1K-record tail | 2.35s [2.03-2.40] | met (see variance) |
+| (info) | Open, snapshot at record 999,000 (999K keys) + 1,000-record tail | 2.35s [2.03-2.40] | met (see variance) |
 
 In-process (`testing.B`, no HTTP, 32 parallel goroutines, `-count 3`):
 
@@ -41,8 +45,8 @@ In-process (`testing.B`, no HTTP, 32 parallel goroutines, `-count 3`):
 | `BenchmarkPut/off` | 7.5K-8.7K | ~130K |
 | `BenchmarkPut/batch` | 72K-96K | ~12K |
 | `BenchmarkPut/always` | 1.26M-1.43M | ~750 |
-| `BenchmarkPutBatchWriters/x1` (32 writers) | 76K-89K | ~12K |
-| `BenchmarkPutBatchWriters/x2` (64 writers) | 34K-46K | ~26K |
+| `BenchmarkPutBatchWriters/x1` (32 writers) | 76K-89K | ~13K |
+| `BenchmarkPutBatchWriters/x2` (64 writers) | 34K-46K | ~29K |
 | `BenchmarkPutBatchWriters/x8` (256 writers) | 11K-12K | ~87K |
 
 Replay in records/s: 0.40M-0.47M (WAL only), 0.42M-0.49M (snapshot + tail).
@@ -61,7 +65,7 @@ load beating a 32-writer in-process one is a batch-size effect (more records
 per fsync), not evidence that HTTP is faster than a function call. The 1024-key
 space and `fmt.Sprintf` in `BenchmarkPut` cost well under a microsecond next
 to an fsync-bound ~80us op, so I did not isolate them. Caveat: the HTTP and
-in-process series were taken minutes apart on a machine whose speed drifted
+in-process series were taken minutes apart on a machine whose speed drifted (likely concurrent kind/Docker load)
 (see variance), so compare the scaling within `BenchmarkPutBatchWriters`, not
 the absolute numbers across tables.
 
@@ -105,7 +109,7 @@ the 1M numbers above come from `KV_BENCH_REPLAY_N=1000000`.
   0.9ms); the generator and Windows loopback are likely a large part of the
   ~3.8ms p99 and the read ceiling. I did not profile it, and I did not tune
   the server for any target.
-- **Run-to-run and session-to-session variance is large.** An earlier series
+- **Run-to-run and session-to-session variance is large**, most likely from the concurrent kind/Docker load noted above. An earlier series
   (appendix) on the same machine gave 54.5K reads/s and 33.9K batch writes/s
   over HTTP, and 1.2s replay; the recorded series gave 72.2K, 26.3K and 2.2s.
   Replay has also taken 3.5-4.4s in a busier session. Treat every figure as
