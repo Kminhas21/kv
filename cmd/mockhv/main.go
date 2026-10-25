@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"log/slog"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Kminhas21/kv/internal/mockhv"
+	"github.com/Kminhas21/kv/internal/serve"
 )
 
 func main() {
@@ -14,10 +17,13 @@ func main() {
 	taskDelay := durationEnv("TASK_DELAY", 2*time.Second)
 	hangFor := durationEnv("HANG_FOR", 10*time.Second)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	hv := mockhv.New(mockhv.Config{TaskDelay: taskDelay, HangFor: hangFor})
 
 	slog.Info("mockhv listening", "addr", addr, "task_delay", taskDelay, "hang_for", hangFor)
-	if err := http.ListenAndServe(addr, hv.Handler()); err != nil {
+	if err := serve.Run(ctx, "mockhv", addr, hv.Handler()); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}

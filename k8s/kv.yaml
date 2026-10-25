@@ -25,7 +25,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         fsGroup: 65532
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 15
       containers:
         - name: kv
           image: vmaas-sim:dev

@@ -19,6 +19,7 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
+      terminationGracePeriodSeconds: 15
       containers:
         - name: mockhv
           image: vmaas-sim:dev

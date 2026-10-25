@@ -26,7 +26,7 @@ spec:
         runAsUser: 65532
       # Kubernetes sends SIGTERM, waits this long, then SIGKILL. vmctl's
       # signal.NotifyContext turns SIGTERM into a cancelled context.
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 15
       containers:
         - name: vmctl
           image: vmaas-sim:dev

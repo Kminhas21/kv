@@ -240,3 +240,18 @@ func TestHVClient_ClassifiesRejection(t *testing.T) {
 		t.Fatalf("unknown task err = %v, want ErrProviderNotFound", err)
 	}
 }
+
+func TestReconciler_RunReturnsWhenContextCancelled(t *testing.T) {
+	s := newSystem(t)
+	s.create("web-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.newReconciler().Run(ctx, 10*time.Millisecond); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}

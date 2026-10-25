@@ -4,14 +4,14 @@
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `signal.NotifyContext` for SIGINT/SIGTERM
-- [ ] `http.Server.Shutdown` with a deadline
-- [ ] Reconciler exits after the current tick on context cancel
-- [ ] kv calls `store.Close()` after `Shutdown`, flushing and fsyncing the WAL
-- [ ] `terminationGracePeriodSeconds: 15` set on all three workloads
-- [ ] Logs show shutdown sequence
+- [x] `signal.NotifyContext` for SIGINT/SIGTERM
+- [x] `http.Server.Shutdown` with a deadline
+- [x] Reconciler exits after the current tick on context cancel
+- [x] kv calls `store.Close()` after `Shutdown`, flushing and fsyncing the WAL
+- [x] `terminationGracePeriodSeconds: 15` set on all three workloads
+- [x] Logs show shutdown sequence
 
 **Concepts:** context propagation, `sync.WaitGroup`, K8s `terminationGracePeriodSeconds` and preStop hooks.
 

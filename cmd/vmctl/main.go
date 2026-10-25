@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/Kminhas21/kv/internal/hvclient"
 	"github.com/Kminhas21/kv/internal/kvclient"
+	"github.com/Kminhas21/kv/internal/serve"
 	"github.com/Kminhas21/kv/internal/vm"
 )
 
@@ -32,10 +33,19 @@ func main() {
 	}
 
 	hv := hvclient.New(hvAddr, hvTimeout)
-	go vm.NewReconciler(repo, hv).Run(ctx, interval)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		vm.NewReconciler(repo, hv).Run(ctx, interval)
+	}()
 
 	slog.Info("vmctl listening", "addr", addr, "kv", kvAddr, "hypervisor", hvAddr, "hv_timeout", hvTimeout)
-	if err := http.ListenAndServe(addr, vm.NewAPI(vm.NewService(repo))); err != nil {
+	err := serve.Run(ctx, "vmctl", addr, vm.NewAPI(vm.NewService(repo)))
+	stop() // if the server failed on its own, stop the reconciler too
+	wg.Wait()
+	slog.Info("vmctl stopped")
+	if err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
