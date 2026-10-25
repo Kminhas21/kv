@@ -1,5 +1,7 @@
 # Local Kubernetes workflow. Needs docker, kind, kubectl (and Git Bash on Windows).
 CLUSTER := vmaas
+# gke-up switches the current kubectl context; pin kind targets to kind.
+KUBECTL := kubectl --context kind-$(CLUSTER)
 IMAGE   := vmaas-sim:dev
 NS      := vmaas
 # Git Bash rewrites /unix/paths in arguments; this turns that off for docker/kubectl.
@@ -31,40 +33,40 @@ load: image
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
 
 deploy:
-	kubectl apply -k k8s/overlays/kind
+	$(KUBECTL) apply -k k8s/overlays/kind
 
 # After a code change: rebuild, load, and restart the pods so they run it.
 # (The tag stays "dev", so Kubernetes would not notice a new image by itself.)
 redeploy: load
-	kubectl -n $(NS) rollout restart statefulset/kv deployment/mockhv deployment/vmctl
+	$(KUBECTL) -n $(NS) rollout restart statefulset/kv deployment/mockhv deployment/vmctl
 	$(MAKE) wait
 
 wait:
-	kubectl -n $(NS) rollout status statefulset/kv --timeout=120s
-	kubectl -n $(NS) rollout status deployment/mockhv --timeout=120s
-	kubectl -n $(NS) rollout status deployment/vmctl --timeout=120s
+	$(KUBECTL) -n $(NS) rollout status statefulset/kv --timeout=120s
+	$(KUBECTL) -n $(NS) rollout status deployment/mockhv --timeout=120s
+	$(KUBECTL) -n $(NS) rollout status deployment/vmctl --timeout=120s
 
 # Everything from scratch: cluster, image, deploy, wait until Ready.
 up: kind-up load deploy wait status
 
 status:
-	kubectl -n $(NS) get pods,svc,pvc -o wide
+	$(KUBECTL) -n $(NS) get pods,svc,pvc -o wide
 
 # Interactive walkthrough with self-checks; DEMO_AUTO=1 make demo runs unattended.
 demo:
 	bash scripts/demo.sh
 
 logs:
-	kubectl -n $(NS) logs -f -l app=vmctl --prefix --max-log-requests 5
+	$(KUBECTL) -n $(NS) logs -f -l app=vmctl --prefix --max-log-requests 5
 
 # Makes vmctl, kv and mockhv reachable on localhost for vmcli, plus Grafana
 # (:3000) and Prometheus (:9090). Runs until Ctrl+C.
 forward:
-	kubectl -n $(NS) port-forward svc/vmctl 8090:8090 & \
-	kubectl -n $(NS) port-forward svc/kv 8080:8080 & \
-	kubectl -n $(NS) port-forward svc/mockhv 8081:8081 & \
-	kubectl -n $(NS) port-forward svc/grafana 3000:3000 & \
-	kubectl -n $(NS) port-forward svc/prometheus 9090:9090 & \
+	$(KUBECTL) -n $(NS) port-forward svc/vmctl 8090:8090 & \
+	$(KUBECTL) -n $(NS) port-forward svc/kv 8080:8080 & \
+	$(KUBECTL) -n $(NS) port-forward svc/mockhv 8081:8081 & \
+	$(KUBECTL) -n $(NS) port-forward svc/grafana 3000:3000 & \
+	$(KUBECTL) -n $(NS) port-forward svc/prometheus 9090:9090 & \
 	echo "Grafana http://localhost:3000 (anonymous viewer)  Prometheus http://localhost:9090"; \
 	wait
 

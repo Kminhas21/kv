@@ -10,6 +10,11 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1 # Git Bash: don't rewrite /usr/local/bin/... paths
 
 NS=vmaas
+# make gke-up leaves kubectl pointed at GKE; never run the kill/restart steps there.
+if [[ "$(kubectl config current-context)" != kind-vmaas ]]; then
+	echo "refusing to run: kubectl context is $(kubectl config current-context), want kind-vmaas" >&2
+	exit 1
+fi
 RUN=$(date +%H%M%S) # suffix so repeated runs get fresh VM names
 FAILURES=0
 
@@ -230,8 +235,9 @@ trap stop_pf EXIT
 # If the trigger never reached kv it says why and leaves RESTARTS=0, RECOVERY=999 so the checks fail.
 fault_recovery() {
 	local before t0 t1 st rc up=
-	RESTARTS=0 RECOVERY=999
+	RESTARTS=0 RECOVERY=999 RESTARTS_WANT=-1
 	before=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount}')
+	RESTARTS_WANT=$((before + 1))
 	kubectl -n "$NS" port-forward pod/kv-0 18080:8080 >/dev/null 2>&1 &
 	PF_PID=$!
 	# Redirect, never curl -o /dev/null: with MSYS_NO_PATHCONV=1 the native curl.exe
@@ -246,7 +252,7 @@ fault_recovery() {
 		return 0
 	fi
 	t0=$(now)
-	curl -s -m 2 -X POST "localhost:18080/debug/$1" >/dev/null
+	curl -sf -m 2 -X POST "localhost:18080/debug/$1" >/dev/null
 	rc=$?
 	stop_pf
 	# crash kills the process mid-request (curl 52 empty reply / 56 reset is expected);
@@ -268,7 +274,7 @@ fault_recovery() {
 under10() { awk -v d="$1" 'BEGIN{exit !(d <= 10)}'; }
 fault_recovery crash
 CRASH_S=$RECOVERY
-check "kv-0 restarted and became Ready after crash" test "$RESTARTS" -ge 1
+check "kv-0 restarted and became Ready after crash" test "$RESTARTS" -eq "$RESTARTS_WANT"
 check "crash recovery ${CRASH_S}s <= 10s" under10 "$CRASH_S"
 wait_ready statefulset/kv kv
 # A container's 2nd restart within 10 minutes waits out CrashLoopBackOff (10s),
@@ -278,7 +284,7 @@ kubectl -n "$NS" delete pod kv-0 >/dev/null
 wait_ready statefulset/kv kv
 fault_recovery hang
 HANG_S=$RECOVERY
-check "kv-0 restarted and became Ready after hang" test "$RESTARTS" -ge 1
+check "kv-0 restarted and became Ready after hang" test "$RESTARTS" -eq "$RESTARTS_WANT"
 check "hang recovery ${HANG_S}s <= 10s" under10 "$HANG_S"
 wait_ready statefulset/kv kv
 say "Summary: crash ${CRASH_S}s, hang ${HANG_S}s"
