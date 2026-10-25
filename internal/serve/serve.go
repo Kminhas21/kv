@@ -6,6 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -25,6 +28,7 @@ func Run(ctx context.Context, name, addr string, h http.Handler) error {
 		return err // failed to start (e.g. port in use)
 	case <-ctx.Done():
 	}
+	signal.Reset(os.Interrupt, syscall.SIGTERM) // second Ctrl+C now force-kills a hung drain
 	slog.Info("shutdown signal received, draining", "service", name, "timeout", ShutdownTimeout)
 	// Fresh context: ctx is already cancelled.
 	sctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)

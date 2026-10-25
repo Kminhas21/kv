@@ -26,7 +26,7 @@ func main() {
 
 	slog.Info("kv listening", "addr", addr, "wal", walPath)
 	err = serve.Run(ctx, "kv", addr, kv.NewHandler(store))
-	// Only after Shutdown returns: no handler can touch the store any more.
+	// After Shutdown: normally no handler is left; if the drain timed out, stragglers may remain but the process exits next.
 	if cerr := store.Close(); cerr != nil {
 		slog.Error("close store", "err", cerr)
 	} else {

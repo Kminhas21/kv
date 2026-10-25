@@ -29,8 +29,9 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for {
-		tickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	for ctx.Err() == nil { // never start a new tick once shutting down
+		// Detached from ctx so a shutdown lets the tick finish; 8s fits serve.ShutdownTimeout.
+		tickCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
 		if err := r.Tick(tickCtx); err != nil {
 			slog.Error("reconcile tick failed", "err", err)
 		}
