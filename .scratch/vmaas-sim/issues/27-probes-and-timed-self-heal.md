@@ -4,14 +4,14 @@
 
 **Blocked by:** 20, 22
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] kv readiness: not ready until replay has finished, and not ready once the store is poisoned
-- [ ] vmctl and mockhv readiness reflect only their own state, never a dependency's
-- [ ] Liveness and readiness: `periodSeconds: 2`, `failureThreshold: 2`, `timeoutSeconds: 1` on all three services; kv gets a startupProbe (2s × 30)
-- [ ] With `FAULTS=1`, kv exposes a debug crash endpoint (process exits) and a debug hang endpoint (the HTTP handlers stop responding); without it those routes don't exist
-- [ ] The demo enables `FAULTS=1` and times crash and hang recovery separately, printing both durations and failing above 10s
-- [ ] Recovery times recorded in the benchmarks doc
+- [x] kv readiness: not ready until replay has finished, and not ready once the store is poisoned
+- [x] vmctl and mockhv readiness reflect only their own state, never a dependency's
+- [x] Liveness and readiness: `periodSeconds: 2`, `failureThreshold: 2`, `timeoutSeconds: 1` on all three services; kv gets a startupProbe (2s × 30)
+- [x] With `FAULTS=1`, kv exposes a debug crash endpoint (process exits) and a debug hang endpoint (the HTTP handlers stop responding); without it those routes don't exist
+- [x] The demo enables `FAULTS=1` and times crash and hang recovery separately, printing both durations and failing above 10s
+- [x] Recovery times recorded in the benchmarks doc
 
 **Concepts:** liveness vs readiness vs startup probes, why readiness must not depend on downstream services (cascading failures), CrashLoopBackOff timing.
 

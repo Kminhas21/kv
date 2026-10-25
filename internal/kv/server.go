@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -83,9 +85,41 @@ func NewHandler(s *Store) http.Handler {
 
 	ok := func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }
 	mux.HandleFunc("GET /healthz", ok)
-	mux.HandleFunc("GET /readyz", ok)
+	// Not-ready-until-replay holds by construction: cmd/kv opens the store
+	// (replaying the WAL) before it starts listening, so nothing answers
+	// /readyz until replay is done. After that, a poisoned store is unready.
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if !s.Writable() {
+			http.Error(w, "store not writable", http.StatusServiceUnavailable)
+			return
+		}
+		io.WriteString(w, "ok")
+	})
 
+	if os.Getenv("FAULTS") == "1" {
+		return withFaults(mux)
+	}
 	return mux
+}
+
+// withFaults adds the fault-injection routes used by the self-heal demo.
+// Only reachable when FAULTS=1; without it these routes do not exist (404).
+func withFaults(mux *http.ServeMux) http.Handler {
+	var hung atomic.Bool
+	mux.HandleFunc("POST /debug/crash", func(w http.ResponseWriter, r *http.Request) {
+		os.Exit(1)
+	})
+	mux.HandleFunc("POST /debug/hang", func(w http.ResponseWriter, r *http.Request) {
+		hung.Store(true)
+		io.WriteString(w, "hanging")
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hung.Load() {
+			<-r.Context().Done() // block until the client gives up
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // parseIfMatch returns nil when the header is absent (unconditional write).

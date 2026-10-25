@@ -5,9 +5,54 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestFaultRoutesAbsentByDefault(t *testing.T) {
+	do := newTestServer(t)
+	for _, p := range []string{"/debug/crash", "/debug/hang"} {
+		if got := do("POST", p, "", "").StatusCode; got != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", p, got)
+		}
+	}
+}
+
+func TestReadyzUnwritableStore(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewHandler(s))
+	defer srv.Close()
+	resp, _ := http.Get(srv.URL + "/readyz")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readyz = %d, want 200", resp.StatusCode)
+	}
+	s.Close()
+	resp, _ = http.Get(srv.URL + "/readyz")
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("readyz after Close = %d, want 503", resp.StatusCode)
+	}
+}
+
+func TestHangBlocksHealthz(t *testing.T) {
+	t.Setenv("FAULTS", "1")
+	srv := httptest.NewServer(NewHandler(NewStore()))
+	defer srv.Close()
+	c := &http.Client{Timeout: 300 * time.Millisecond}
+	if resp, err := c.Get(srv.URL + "/healthz"); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz before hang: %v", err)
+	}
+	if resp, err := c.Post(srv.URL+"/debug/hang", "", nil); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("hang: %v", err)
+	}
+	if _, err := c.Get(srv.URL + "/healthz"); err == nil {
+		t.Fatal("healthz answered after hang, want timeout")
+	}
+}
 
 // newTestServer starts the kv handler on a real local port and returns a
 // helper that sends one request with optional If-Match.

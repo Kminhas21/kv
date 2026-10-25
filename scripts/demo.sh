@@ -170,6 +170,51 @@ run hosts
 pause
 
 # ---------------------------------------------------------------------------
+bold "6. Timed self-heal: crash and hang kv-0"
+say "The kind overlay sets FAULTS=1, so kv has POST /debug/crash (process exits)"
+say "and POST /debug/hang (every handler, /healthz included, blocks forever)."
+say "The image has no shell, so we trigger them through a temporary port-forward."
+say "Probes: every 2s, 2 failures, 1s timeout. Crash: kubelet sees the exit at once."
+say "Hang: liveness needs 2 failed probes (~4-5s), then SIGTERM. The hung handlers"
+say "wait on their request context, which the timed-out probe connections cancel,"
+say "so the drain finishes fast; then restart, startup and readiness probes."
+now() { date +%s.%N; }
+# fault_recovery ENDPOINT -> sets RECOVERY (seconds) once kv-0 is Ready with restartCount+1
+fault_recovery() {
+	local before pf t0 t1 st
+	before=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount}')
+	kubectl -n "$NS" port-forward pod/kv-0 18080:8080 >/dev/null 2>&1 &
+	pf=$!
+	for _ in $(seq 1 50); do curl -s -o /dev/null -m 1 localhost:18080/healthz && break; sleep 0.2; done
+	t0=$(now)
+	curl -s -o /dev/null -m 2 -X POST "localhost:18080/debug/$1"
+	kill "$pf" 2>/dev/null
+	for _ in $(seq 1 600); do
+		st=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+		[[ "$st" == "$((before + 1)) True" ]] && break
+		sleep 0.2
+	done
+	t1=$(now)
+	RESTARTS="${st% *}"
+	RECOVERY=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
+	say "$1: restartCount $before -> $RESTARTS, Ready again after ${RECOVERY}s"
+}
+under10() { awk -v d="$1" 'BEGIN{exit !(d <= 10)}'; }
+fault_recovery crash
+CRASH_S=$RECOVERY
+check "kv-0 restarted and became Ready after crash" test "$RESTARTS" -ge 1
+check "crash recovery ${CRASH_S}s <= 10s" under10 "$CRASH_S"
+wait_ready statefulset/kv kv
+fault_recovery hang
+HANG_S=$RECOVERY
+check "kv-0 restarted and became Ready after hang" test "$RESTARTS" -ge 1
+check "hang recovery ${HANG_S}s <= 10s" under10 "$HANG_S"
+wait_ready statefulset/kv kv
+say "Summary: crash ${CRASH_S}s, hang ${HANG_S}s"
+check "VM records survived both restarts" test "$(vmcli vm list | grep -c "demo-")" -eq "$BEFORE"
+pause
+
+# ---------------------------------------------------------------------------
 bold "Done"
 if [[ $FAILURES -eq 0 ]]; then
 	printf '   \033[32mAll checks passed.\033[0m\n'

@@ -40,15 +40,25 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          # Startup: liveness/readiness stay off until this first succeeds, for
+          # up to 2s x 30 = 60s of slack (kv replays its WAL before listening).
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
           # Liveness: "is the process stuck?" Failing it restarts the container.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
-            periodSeconds: 10
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           # Readiness: "should it receive traffic?" Failing it removes the pod
           # from the Service's endpoints without restarting it.
           readinessProbe:
             httpGet: { path: /readyz, port: http }
-            periodSeconds: 5
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           # Requests are what the Kubernetes scheduler reserves on a node (like
           # our host reservations); limits are the hard ceiling. Exceeding the
           # memory limit gets the container OOM-killed; CPU is only throttled.

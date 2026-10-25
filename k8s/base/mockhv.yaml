@@ -36,10 +36,14 @@ spec:
               containerPort: 8081
           livenessProbe:
             httpGet: { path: /healthz, port: http }
-            periodSeconds: 10
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           readinessProbe:
             httpGet: { path: /readyz, port: http }
-            periodSeconds: 5
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           resources:
             requests: { cpu: 50m, memory: 32Mi }
             limits: { memory: 128Mi }
