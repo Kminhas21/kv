@@ -13,6 +13,9 @@ data:
   HV_ADDR: "http://mockhv:8081"
 
   WAL_PATH: "/data/kv.wal"
+  # off | always | batch. batch = group commit: a PUT is answered only after
+  # its record is fsynced, and concurrent PUTs share one fsync.
+  WAL_FSYNC: "batch"
   RECONCILE_INTERVAL: "2s"
   # HV_TIMEOUT must be shorter than HANG_FOR, or a "lost response" would
   # simply be a slow response.

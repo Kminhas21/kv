@@ -43,13 +43,39 @@ type walRecord struct {
 	Version uint64 `json:"version"`
 }
 
+// FsyncMode says when a write is acknowledged relative to fsync (WAL_FSYNC).
+type FsyncMode string
+
+const (
+	FsyncOff    FsyncMode = "off"    // write to the OS, never fsync: survives a process crash only
+	FsyncAlways FsyncMode = "always" // one fsync per write
+	FsyncBatch  FsyncMode = "batch"  // group commit: concurrent writes share one fsync
+)
+
+var errClosed = errors.New("store closed")
+
+// commit is a record waiting for the flusher, and where to send its result.
+type commit struct {
+	rec  walRecord
+	done chan error
+}
+
 type Store struct {
 	mu       sync.RWMutex
 	data     map[string]Entry
 	revision uint64
 
-	wal    *os.File
-	enc    *json.Encoder
+	wal     *os.File
+	bw      *bufio.Writer // batch/always only: the flusher's buffer in front of wal
+	enc     *json.Encoder
+	syncWAL func() error // wal.Sync; a field so tests can inject a failure
+
+	// Group commit (batch/always). wake is nil in off mode.
+	wake    chan struct{} // cap 1: "the queue is non-empty"
+	flushed chan struct{} // closed when the flusher exits
+
+	qmu    sync.Mutex // guards queue and walErr; taken after s.mu, never before
+	queue  []commit
 	walErr error
 }
 
@@ -60,7 +86,12 @@ func NewStore() *Store {
 
 // Open returns a store backed by the WAL at path, replaying any existing
 // records first. The file is created if it does not exist.
-func Open(path string) (*Store, error) {
+func Open(path string, mode FsyncMode) (*Store, error) {
+	switch mode {
+	case FsyncOff, FsyncAlways, FsyncBatch:
+	default:
+		return nil, fmt.Errorf("unknown WAL fsync mode %q (want off, always or batch)", mode)
+	}
 	s := NewStore()
 	if err := s.replayFile(path); err != nil {
 		return nil, err
@@ -72,7 +103,16 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open WAL for append: %w", err)
 	}
 	s.wal = f
-	s.enc = json.NewEncoder(f)
+	s.syncWAL = f.Sync
+	if mode == FsyncOff {
+		s.enc = json.NewEncoder(f)
+		return s, nil
+	}
+	s.bw = bufio.NewWriter(f)
+	s.enc = json.NewEncoder(s.bw)
+	s.wake = make(chan struct{}, 1)
+	s.flushed = make(chan struct{})
+	go s.flusher(mode == FsyncAlways)
 	return s, nil
 }
 
@@ -126,14 +166,30 @@ func (s *Store) replay(f *os.File) error {
 	return nil
 }
 
-// Close closes the WAL file. The store must not be used afterwards.
+// Close waits for every queued write to be committed, fsyncs and closes the
+// WAL. Writes after Close fail.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.wal == nil {
 		return nil
 	}
-	return s.wal.Close()
+	// Holding s.mu means nothing new can be queued, so the flusher drains
+	// what is there and exits.
+	if s.wake != nil {
+		close(s.wake)
+		<-s.flushed
+	}
+	s.poison(errClosed) // keeps an earlier error; either way walErr is now set
+	err := errors.Join(s.wal.Sync(), s.wal.Close())
+	s.wal = nil
+	return err
+}
+
+// Writable reports whether the store still accepts writes: false once a
+// WAL append or fsync has failed, and after Close.
+func (s *Store) Writable() bool {
+	return s.err() == nil
 }
 
 func (s *Store) Get(key string) (value string, version uint64, ok bool) {
@@ -149,53 +205,146 @@ func (s *Store) Get(key string) (value string, version uint64, ok bool) {
 // the current version and ErrConflict.
 func (s *Store) Put(key, value string, ifMatch *uint64) (version uint64, created bool, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cur, existed := s.data[key]
 	if ifMatch != nil && *ifMatch != cur.Version {
+		s.mu.Unlock()
 		return cur.Version, false, ErrConflict
 	}
 	rec := walRecord{Op: opPut, Key: key, Value: value, Version: s.revision + 1}
-	if err := s.log(rec); err != nil {
+	done, err := s.write(rec)
+	s.mu.Unlock()
+	if err == nil && done != nil {
+		err = <-done // wait for the fsync without blocking readers or other writers
+	}
+	if err != nil {
 		return 0, false, err
 	}
-	s.apply(rec)
 	return rec.Version, !existed, nil
 }
 
 // Delete removes key, with the same ifMatch semantics as Put.
 func (s *Store) Delete(key string, ifMatch *uint64) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cur, existed := s.data[key]
 	if ifMatch != nil && *ifMatch != cur.Version {
+		s.mu.Unlock()
 		return ErrConflict
 	}
 	if !existed {
+		s.mu.Unlock()
 		return ErrNotFound
 	}
 	rec := walRecord{Op: opDelete, Key: key, Version: s.revision + 1}
-	if err := s.log(rec); err != nil {
-		return err
+	done, err := s.write(rec)
+	s.mu.Unlock()
+	if err == nil && done != nil {
+		err = <-done
+	}
+	return err
+}
+
+// write logs and applies rec. Callers must hold s.mu, so log order matches
+// revision order. In off mode the record goes straight to the file, then is
+// applied. Otherwise it is applied now and queued for the flusher, and the
+// caller waits on the returned channel after releasing s.mu: readers may see
+// the write before it is durable, but it is not acknowledged until it is
+// (ADR-0001).
+func (s *Store) write(rec walRecord) (<-chan error, error) {
+	if err := s.err(); err != nil {
+		return nil, err
+	}
+	if s.wake == nil {
+		if s.wal != nil {
+			if err := s.enc.Encode(rec); err != nil {
+				return nil, s.poison(fmt.Errorf("append to WAL: %w", err))
+			}
+		}
+		s.apply(rec)
+		return nil, nil
 	}
 	s.apply(rec)
+	done := make(chan error, 1)
+	s.qmu.Lock()
+	s.queue = append(s.queue, commit{rec: rec, done: done})
+	s.qmu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default: // a wake-up is already pending
+	}
+	return done, nil
+}
+
+// flusher is the only goroutine that writes the WAL in batch/always mode.
+// It sleeps until a record is queued, then commits everything queued (one
+// record per fsync when one is true). There is no timer: a batch is
+// whatever piled up while the previous fsync ran.
+func (s *Store) flusher(one bool) {
+	defer close(s.flushed)
+	for range s.wake {
+		for s.flushBatch(one) {
+		}
+	}
+}
+
+// flushBatch commits the records at the head of the queue and wakes their
+// writers. It reports false if the queue was empty.
+func (s *Store) flushBatch(one bool) bool {
+	s.qmu.Lock()
+	n := len(s.queue)
+	if n == 0 {
+		s.qmu.Unlock()
+		return false
+	}
+	if one {
+		n = 1
+	}
+	batch := s.queue[:n:n]
+	s.queue = s.queue[n:]
+	err := s.walErr
+	s.qmu.Unlock()
+
+	if err == nil {
+		if err = s.commitBatch(batch); err != nil {
+			s.poison(err)
+		}
+	}
+	for _, c := range batch {
+		c.done <- err
+	}
+	return true
+}
+
+func (s *Store) commitBatch(batch []commit) error {
+	for _, c := range batch {
+		if err := s.enc.Encode(c.rec); err != nil {
+			return fmt.Errorf("append to WAL: %w", err)
+		}
+	}
+	if err := s.bw.Flush(); err != nil {
+		return fmt.Errorf("append to WAL: %w", err)
+	}
+	if err := s.syncWAL(); err != nil {
+		return fmt.Errorf("fsync WAL: %w", err)
+	}
 	return nil
 }
 
-// log appends rec to the WAL. Callers must hold s.mu so log order matches
-// revision order. After any write failure the store refuses further writes:
-// a partial line mid-file would make every later record unreadable.
-func (s *Store) log(rec walRecord) error {
-	if s.wal == nil {
-		return nil
+// poison makes every later write fail (the first error wins). After a
+// failed append the file may end in a partial line, and after a failed
+// fsync we no longer know what is on disk, so carrying on is unsafe.
+func (s *Store) poison(err error) error {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	if s.walErr == nil {
+		s.walErr = err
 	}
-	if s.walErr != nil {
-		return s.walErr
-	}
-	if err := s.enc.Encode(rec); err != nil {
-		s.walErr = fmt.Errorf("append to WAL: %w", err)
-		return s.walErr
-	}
-	return nil
+	return s.walErr
+}
+
+func (s *Store) err() error {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	return s.walErr
 }
 
 // apply mutates memory from a record. It is the only code that changes
