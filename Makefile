@@ -5,11 +5,16 @@ NS      := vmaas
 # Git Bash rewrites /unix/paths in arguments; this turns that off for docker/kubectl.
 export MSYS_NO_PATHCONV := 1
 
-.PHONY: test kind-up kind-down image load deploy redeploy up status logs forward wait demo gke-check gke-up gke-down
+.PHONY: test bench kind-up kind-down image load deploy redeploy up status logs forward wait demo gke-check gke-up gke-down
 
 test:
 	go vet ./...
 	go test ./...
+
+# In-process benchmarks; the replay one builds a 1M-record WAL (takes a while).
+bench:
+	KV_BENCH_REPLAY_N=1000000 go test -run '^$$' -bench Replay1M -benchtime 3x -timeout 30m ./internal/kv
+	go test -run '^$$' -bench 'Get|Put' -count 3 ./internal/kv
 
 kind-up:
 	kind get clusters | grep -qx $(CLUSTER) || kind create cluster --config k8s/kind-config.yaml
