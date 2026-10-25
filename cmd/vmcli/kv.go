@@ -60,6 +60,9 @@ func (a *app) kvCmd(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		if *ttl < 0 {
+			return usageError{fmt.Sprintf("kv put: -ttl must not be negative, got %v", *ttl)}
+		}
 		ver, err := a.kv.PutTTL(ctx, pos[0], pos[1], ifMatch.v, *ttl)
 		if errors.Is(err, kv.ErrConflict) {
 			return fmt.Errorf("%w (current version is %d)", err, ver)

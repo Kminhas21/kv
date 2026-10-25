@@ -108,8 +108,8 @@ func parseTTL(r *http.Request) (time.Duration, error) {
 		return 0, nil
 	}
 	ttl, err := time.ParseDuration(q.Get("ttl"))
-	if err != nil || ttl <= 0 {
-		return 0, fmt.Errorf("invalid ttl %q: must be a positive duration like 30s", q.Get("ttl"))
+	if err != nil || ttl <= 0 || ttl > MaxTTL {
+		return 0, fmt.Errorf("invalid ttl %q: must be a positive duration like 30s, at most %v", q.Get("ttl"), MaxTTL)
 	}
 	return ttl, nil
 }

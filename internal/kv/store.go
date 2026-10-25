@@ -58,6 +58,10 @@ type walRecord struct {
 // so a mass expiry cannot stall writers for long.
 const maxSweep = 1000
 
+// MaxTTL is the longest TTL accepted. Beyond ~year 2262 UnixNano overflows,
+// so a cap well short of that keeps expires_at meaningful.
+const MaxTTL = 100 * 365 * 24 * time.Hour
+
 // FsyncMode says when a write is acknowledged relative to fsync (WAL_FSYNC).
 type FsyncMode string
 
@@ -241,8 +245,11 @@ func (s *Store) Put(key, value string, ifMatch *uint64) (version uint64, created
 }
 
 // PutTTL is Put with a TTL: the key expires ttl from now. ttl <= 0 makes
-// the key permanent. Every write resets the expiry.
+// the key permanent; ttl > MaxTTL is an error. Every write resets the expiry.
 func (s *Store) PutTTL(key, value string, ifMatch *uint64, ttl time.Duration) (version uint64, created bool, err error) {
+	if ttl > MaxTTL {
+		return 0, false, fmt.Errorf("ttl %v exceeds the maximum %v", ttl, MaxTTL)
+	}
 	s.mu.Lock()
 	cur, existed := s.lookup(key)
 	if ifMatch != nil && *ifMatch != cur.Version {
@@ -251,7 +258,12 @@ func (s *Store) PutTTL(key, value string, ifMatch *uint64, ttl time.Duration) (v
 	}
 	rec := walRecord{Op: opPut, Key: key, Value: value, Version: s.revision + 1}
 	if ttl > 0 {
-		rec.ExpiresAt = s.now().Add(ttl).UnixNano()
+		now := s.now()
+		rec.ExpiresAt = now.Add(ttl).UnixNano()
+		if rec.ExpiresAt <= now.UnixNano() { // UnixNano wrapped: possible only with a clock past ~2162
+			s.mu.Unlock()
+			return 0, false, fmt.Errorf("ttl %v overflows the expiry time", ttl)
+		}
 	}
 	done, err := s.write(rec)
 	s.mu.Unlock()
@@ -425,6 +437,9 @@ func (s *Store) List(prefix string) []Item {
 // every interval (active expiry). Call it at most once, before the store is
 // shared; Close stops it.
 func (s *Store) StartSweeper(interval time.Duration) {
+	if s.stopSweep != nil {
+		panic("kv: StartSweeper called twice")
+	}
 	t := time.NewTicker(interval)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -444,7 +459,7 @@ func (s *Store) sweepLoop(ctx context.Context, ticks <-chan time.Time) {
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			for s.sweepChunk() == maxSweep {
+			for ctx.Err() == nil && s.sweepChunk() == maxSweep {
 			}
 		}
 	}

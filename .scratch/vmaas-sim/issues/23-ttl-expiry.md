@@ -18,6 +18,6 @@ Notes: the Go API is `Store.PutTTL` / `kvclient.Client.PutTTL` (`Put` delegates 
 
 **Concepts:** lazy vs active expiry, `time.Ticker` + `context` for goroutine lifecycle, injecting a clock for tests, why absolute times beat durations on disk.
 
-**Mock vs production:** Redis uses the same lazy + sampled active expiry. etcd attaches keys to leases rather than giving each key its own TTL, and lease expiry there *is* a replicated write that bumps the revision; we chose not to log expiry.
+**Mock vs production:** Redis uses the same lazy + sampled active expiry. etcd attaches keys to leases rather than giving each key its own TTL, and lease expiry there *is* a replicated write that bumps the revision; we chose not to log expiry. Because the disk holds absolute wall-clock times, a wall-clock jump (an NTP step, a VM resume) shifts every key's expiry with it; that is inherent to absolute times on disk.
 
 **Manual check:** `vmcli kv put --ttl 5s tmp x` (Go's `flag` package stops at the first positional argument, so flags come first), get it, wait 6s, get it → 404.

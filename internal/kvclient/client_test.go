@@ -138,7 +138,9 @@ func TestClient_PutTTLSendsTTLAndIfMatch(t *testing.T) {
 		t.Errorf("Get after PutTTL = v%d, %v; want v%d", ver, err, v)
 	}
 
-	c.Put(ctx, "leases/vmctl", "pod-a", &v)
+	if _, err := c.Put(ctx, "leases/vmctl", "pod-a", &v); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
 	if gotQuery != "" {
 		t.Errorf("plain Put sent query %q, want none (permanent)", gotQuery)
 	}

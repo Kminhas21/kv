@@ -141,6 +141,14 @@ func TestTTL_CloseStopsSweeper(t *testing.T) {
 
 	m := NewStore()
 	m.StartSweeper(time.Millisecond)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("second StartSweeper did not panic")
+			}
+		}()
+		m.StartSweeper(time.Millisecond)
+	}()
 	m.Close() // memory-only stores stop their sweeper too
 }
 
@@ -164,6 +172,63 @@ func TestTTL_ReplayDropsExpiredAndKeepsDeadline(t *testing.T) {
 	}
 	if s.revision != last {
 		t.Errorf("revision after replay = %d, want %d (dropped records still count)", s.revision, last)
+	}
+}
+
+func TestTTL_OverflowingTTLIsRejectedAndKeepsOldValue(t *testing.T) {
+	s, clk := newClockedStore()
+	s.Put("k", "old", nil)
+	if _, _, err := s.PutTTL("k", "new", nil, MaxTTL+time.Hour); err == nil {
+		t.Error("PutTTL beyond MaxTTL succeeded")
+	}
+	clk.t = time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC) // 2200 + 100y wraps UnixNano
+	if _, _, err := s.PutTTL("k", "new", nil, MaxTTL); err == nil {
+		t.Error("PutTTL whose expiry overflows UnixNano succeeded")
+	}
+	if v, _, ok := s.Get("k"); !ok || v != "old" {
+		t.Errorf("Get after rejected PutTTL = %q ok=%v, want \"old\"", v, ok)
+	}
+}
+
+func TestTTL_ReplayExpiredPutHidesEarlierPermanentValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kv.wal")
+	s := openT(t, path)
+	s.Put("k", "permanent", nil)
+	s.now = func() time.Time { return time.Now().Add(-time.Hour) }
+	s.PutTTL("k", "short-lived", nil, time.Minute) // expired 59m ago in real time
+	s.Close()
+
+	s = openT(t, path)
+	defer s.Close()
+	if v, _, ok := s.Get("k"); ok {
+		t.Errorf("Get(k) after reopen = %q, want missing (latest put expired)", v)
+	}
+}
+
+func TestTTL_SweepWritesNothingToWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kv.wal")
+	s := openT(t, path)
+	defer s.Close()
+	clk := &fakeClock{t: time.Now()}
+	s.now = clk.Now
+	for i := range 10 {
+		s.PutTTL(fmt.Sprintf("k%d", i), "x", nil, time.Second) // returns after fsync
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Second)
+	if n := s.sweepChunk(); n != 10 {
+		t.Fatalf("sweepChunk removed %d, want 10", n)
+	}
+	s.Close() // drains and fsyncs anything that might have been queued
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Errorf("WAL grew from %d to %d bytes during a sweep, want unchanged", before.Size(), after.Size())
 	}
 }
 
@@ -193,7 +258,7 @@ func TestServer_TTL(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	for _, bad := range []string{"?ttl=", "?ttl=abc", "?ttl=0s", "?ttl=-5s"} {
+	for _, bad := range []string{"?ttl=", "?ttl=abc", "?ttl=0s", "?ttl=-5s", "?ttl=2500000h"} {
 		if code := put(bad); code != http.StatusBadRequest {
 			t.Errorf("PUT %s = %d, want 400", bad, code)
 		}
