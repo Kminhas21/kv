@@ -147,9 +147,9 @@ func (s *Store) maybeSnapshot() {
 	start := time.Now()
 	snap := snapshot{Revision: s.revision, Entries: s.liveEntries()}
 	switched := s.switchTo(segmentPath(s.path, s.revision))
-	slog.Info("snapshot started", "revision", snap.Revision, "keys", len(snap.Entries), "write_pause", time.Since(start))
+	pause := time.Since(start)
 	s.snapWG.Add(1)
-	go s.writeSnapshot(snap, switched)
+	go s.writeSnapshot(snap, switched, pause)
 }
 
 // liveEntries copies the map without expired keys. Callers must hold s.mu.
@@ -201,7 +201,7 @@ func (s *Store) switchSegment(path string, durable bool) error {
 	if err := s.wal.Close(); err != nil {
 		slog.Warn("close old WAL segment", "err", err) // its records are already written
 	}
-	s.wal, s.syncWAL = f, f.Sync
+	s.wal = f
 	if s.bw != nil {
 		s.bw.Reset(f) // s.enc writes into s.bw
 	} else {
@@ -213,9 +213,10 @@ func (s *Store) switchSegment(path string, durable bool) error {
 
 // writeSnapshot runs in the background, off s.mu. A failure is logged and
 // does not poison the store: the WAL is still the source of truth.
-func (s *Store) writeSnapshot(snap snapshot, switched <-chan error) {
+func (s *Store) writeSnapshot(snap snapshot, switched <-chan error, pause time.Duration) {
 	defer s.snapWG.Done()
 	defer s.snapping.Store(false)
+	slog.Info("snapshot started", "revision", snap.Revision, "keys", len(snap.Entries), "write_pause", pause) // logged here, not under s.mu
 	if err := s.persistSnapshot(snap, switched); err != nil {
 		slog.Error("snapshot failed; retrying at the next threshold", "revision", snap.Revision, "err", err)
 	}

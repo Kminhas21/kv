@@ -139,7 +139,7 @@ func Open(path string, mode FsyncMode, snapshotEvery uint64) (*Store, error) {
 		return nil, fmt.Errorf("open WAL for append: %w", err)
 	}
 	s.wal = f
-	s.syncWAL = f.Sync
+	s.syncWAL = func() error { return s.wal.Sync() } // follows segment switches
 	if mode == FsyncOff {
 		s.enc = json.NewEncoder(f)
 		return s, nil
