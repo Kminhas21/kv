@@ -115,6 +115,9 @@ func withFaults(mux *http.ServeMux) http.Handler {
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hung.Load() {
+			// Go notices a closed connection only after the body is read, so a
+			// PUT that skips this would block past its client and stall the drain.
+			io.Copy(io.Discard, r.Body)
 			<-r.Context().Done() // block until the client gives up
 			return
 		}

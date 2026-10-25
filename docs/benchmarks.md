@@ -169,6 +169,17 @@ Probes (all three services): `periodSeconds: 2`, `failureThreshold: 2`,
 | crash | 4.1s  | 3.2s  | 1.9s  |
 | hang  | 6.3s  | 7.8s  | 7.2s  |
 
+Rerun after ticket 25 (vmctl at 3 replicas): crash took 2.9s, 2.9s and 2.8s. Hang took 6.0s, but only
+after two fixes; before them it took 12.2s and 17.2s:
+
+- **Hung PUTs stalled the drain.** With lease renewals, there is now always a PUT in
+  flight during a hang. Go notices a client disconnect only after the handler
+  has read the request body. A hung PUT therefore never returned, and the
+  drain ran out its full 10s. The hang path now discards the body first.
+- **CrashLoopBackOff.** A container's second restart within 10 minutes waits 10s.
+  The demo now recreates `kv-0` between the crash and the hang, so the backoff
+  isn't timed as part of the hang.
+
 Why crash is faster: the kubelet sees the container exit immediately, so there
 is no detection delay; only the restart plus the first startup and readiness
 probes remain. A hang needs about 2 failed liveness probes (up to ~5s) first.

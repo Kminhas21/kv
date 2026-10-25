@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -58,6 +59,27 @@ func TestHangBlocksHealthz(t *testing.T) {
 	}
 	if _, err := c.Get(srv.URL + "/healthz"); err == nil {
 		t.Fatal("healthz answered after hang, want timeout")
+	}
+}
+
+// A hung PUT must still notice its client giving up, or a liveness restart
+// waits out the whole drain timeout. Go only watches for a closed connection
+// once the request body has been read.
+func TestHangReleasesPUTWhenClientGivesUp(t *testing.T) {
+	t.Setenv("FAULTS", "1")
+	srv := httptest.NewServer(NewHandler(NewStore())) // no Close: it would block on a stuck handler
+	c := &http.Client{Timeout: 200 * time.Millisecond}
+	if resp, err := c.Post(srv.URL+"/debug/hang", "", nil); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("hang: %v", err)
+	}
+	req, _ := http.NewRequest("PUT", srv.URL+"/keys/a", strings.NewReader("value"))
+	if _, err := c.Do(req); err == nil {
+		t.Fatal("PUT answered after hang, want timeout")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Config.Shutdown(ctx); err != nil {
+		t.Fatalf("drain after the client gave up: %v (hung PUT handler never returned)", err)
 	}
 }
 

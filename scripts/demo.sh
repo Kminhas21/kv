@@ -234,8 +234,10 @@ fault_recovery() {
 	before=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount}')
 	kubectl -n "$NS" port-forward pod/kv-0 18080:8080 >/dev/null 2>&1 &
 	PF_PID=$!
+	# Redirect, never curl -o /dev/null: with MSYS_NO_PATHCONV=1 the native curl.exe
+	# cannot open /dev/null and exits 23 even though the request succeeded.
 	for _ in $(seq 1 50); do
-		if curl -s -o /dev/null -m 1 localhost:18080/healthz; then up=1; break; fi
+		if curl -s -m 1 localhost:18080/healthz >/dev/null; then up=1; break; fi
 		sleep 0.2
 	done
 	if [[ -z "$up" ]]; then
@@ -244,7 +246,7 @@ fault_recovery() {
 		return 0
 	fi
 	t0=$(now)
-	curl -s -o /dev/null -m 2 -X POST "localhost:18080/debug/$1"
+	curl -s -m 2 -X POST "localhost:18080/debug/$1" >/dev/null
 	rc=$?
 	stop_pf
 	# crash kills the process mid-request (curl 52 empty reply / 56 reset is expected);
@@ -268,6 +270,11 @@ fault_recovery crash
 CRASH_S=$RECOVERY
 check "kv-0 restarted and became Ready after crash" test "$RESTARTS" -ge 1
 check "crash recovery ${CRASH_S}s <= 10s" under10 "$CRASH_S"
+wait_ready statefulset/kv kv
+# A container's 2nd restart within 10 minutes waits out CrashLoopBackOff (10s),
+# which would be timed as part of the hang. A fresh pod resets the backoff.
+say "Recreating kv-0 so the hang is timed without the kubelet's restart backoff."
+kubectl -n "$NS" delete pod kv-0 >/dev/null
 wait_ready statefulset/kv kv
 fault_recovery hang
 HANG_S=$RECOVERY
