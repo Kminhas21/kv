@@ -13,7 +13,7 @@ Intel Core i9-14900HX (24 cores / 32 threads), Windows 11 Home 10.0.26300,
 Samsung MZVL41T0HBLB NVMe SSD (NTFS; WAL in `%TEMP%`), Go 1.26.5 windows/amd64.
 kv and kvbench ran on the same machine over loopback, as separately built
 binaries (`go build -o`), not `go run`. A kind cluster under Docker Desktop (kv,
-vmctl and mockhv pods plus a demo script, owned by another task) was running
+vmctl and mockhv pods, running the demo) was running
 concurrently on this machine during some or all of the recorded series; which
 minutes overlapped is unknown. That background load is the likely cause of the
 drift described below. **Re-run on an idle machine (Docker Desktop stopped)

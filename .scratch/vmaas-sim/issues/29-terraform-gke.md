@@ -25,5 +25,5 @@
 ## Comments
 
 - Code complete. Terraform validated offline (fmt, init -backend=false, validate in hashicorp/terraform:1.9). The kind overlay renders identically to the old `kubectl kustomize k8s`.
-- **Live run pending.** Nothing was applied to GCP. The user must run `make gke-up` / `make gke-down` for real and record the measured gke-up time in the benchmarks doc (it does not exist yet, so that checkbox stays unticked). The Manual check is also theirs.
-- GKE overlay uses placeholders (REGION/PROJECT_ID/IMAGE_TAG) filled by sed in `make gke-up`, which pipes `kubectl kustomize` into `kubectl apply -f -` instead of `apply -k`.
+- **Live run pending.** Nothing was applied to GCP. The user must run `make gke-up` / `make gke-down` for real and record the measured gke-up time in the benchmarks doc (the benchmarks doc exists; its gke-up time row is pending the live run, so that checkbox stays unticked). The Manual check is also theirs.
+- GKE overlay uses placeholders (`__GKE_IMAGE__`/`__GKE_TAG__`) filled by sed in `make gke-up`, which pipes `kubectl kustomize` into `kubectl apply -f -` instead of `apply -k`.
