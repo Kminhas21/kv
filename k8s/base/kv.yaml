@@ -41,7 +41,9 @@ spec:
             - name: data
               mountPath: /data
           # Startup: liveness/readiness stay off until this first succeeds, for
-          # up to 2s x 30 = 60s of slack (kv replays its WAL before listening).
+          # up to 2s x 30 = 60s of slack (kv replays its WAL before listening). A replay longer than about 60s
+          # fails the startup probe and crash-loops the pod; raise failureThreshold
+          # if the WAL ever grows that large.
           startupProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 2

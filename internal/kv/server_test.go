@@ -12,6 +12,7 @@ import (
 )
 
 func TestFaultRoutesAbsentByDefault(t *testing.T) {
+	t.Setenv("FAULTS", "") // don't inherit it from the caller's environment
 	do := newTestServer(t)
 	for _, p := range []string{"/debug/crash", "/debug/hang"} {
 		if got := do("POST", p, "", "").StatusCode; got != http.StatusNotFound {
@@ -27,14 +28,20 @@ func TestReadyzUnwritableStore(t *testing.T) {
 	}
 	srv := httptest.NewServer(NewHandler(s))
 	defer srv.Close()
-	resp, _ := http.Get(srv.URL + "/readyz")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("readyz = %d, want 200", resp.StatusCode)
+	readyz := func() int {
+		resp, err := http.Get(srv.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := readyz(); got != http.StatusOK {
+		t.Fatalf("readyz = %d, want 200", got)
 	}
 	s.Close()
-	resp, _ = http.Get(srv.URL + "/readyz")
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("readyz after Close = %d, want 503", resp.StatusCode)
+	if got := readyz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("readyz after Close = %d, want 503", got)
 	}
 }
 

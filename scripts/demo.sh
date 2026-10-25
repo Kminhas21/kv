@@ -138,8 +138,18 @@ wait_ready deployment/vmctl vmctl
 NEW_POD=$(pod_of vmctl)
 say "old pod: $OLD_POD   new pod: $NEW_POD"
 check "Kubernetes replaced the vmctl pod" test "$NEW_POD" != "$OLD_POD"
+# vmcli's watch exits on the first connection error (vmctl just restarted), so
+# poll the phase ourselves instead of trusting a single watch.
+wait_phase() { # wait_phase VM PHASE TIMEOUT_SECONDS
+	local i
+	for ((i = 0; i < $3; i += 2)); do
+		[[ "$(phase "$1" 2>/dev/null)" == "$2" ]] && return 0
+		sleep 2
+	done
+	return 1
+}
 vmcli vm watch -until Running -timeout 90s "$CRASH" 2>/dev/null
-check "VM reached Running after the crash" test "$(phase "$CRASH")" = Running
+check "VM reached Running after the crash" wait_phase "$CRASH" Running 90
 check "exactly 1 VM on the hypervisor" test "$(hv_count "$CRASH")" -eq 1
 check "still only 1 create attempt (the new pod polled the saved task)" test "$(op_field "$CRASH_OP" attempts)" = 1
 say "What the NEW vmctl pod logged for this VM (no 'create submitted' line):"
@@ -179,16 +189,45 @@ say "Hang: liveness needs 2 failed probes (~4-5s), then SIGTERM. The hung handle
 say "wait on their request context, which the timed-out probe connections cancel,"
 say "so the drain finishes fast; then restart, startup and readiness probes."
 now() { date +%s.%N; }
-# fault_recovery ENDPOINT -> sets RECOVERY (seconds) once kv-0 is Ready with restartCount+1
+PF_PID=
+# Git Bash's kill may not reach the native kubectl.exe, so also taskkill its Windows pid.
+stop_pf() {
+	[[ -n "$PF_PID" ]] || return 0
+	local win
+	win=$(cat "/proc/$PF_PID/winpid" 2>/dev/null)
+	kill "$PF_PID" 2>/dev/null
+	[[ -n "$win" ]] && taskkill //F //PID "$win" >/dev/null 2>&1
+	PF_PID=
+	return 0
+}
+trap stop_pf EXIT
+# fault_recovery ENDPOINT -> sets RECOVERY (seconds) and RESTARTS once kv-0 is Ready with restartCount+1.
+# If the trigger never reached kv it says why and leaves RESTARTS=0, RECOVERY=999 so the checks fail.
 fault_recovery() {
-	local before pf t0 t1 st
+	local before t0 t1 st rc up=
+	RESTARTS=0 RECOVERY=999
 	before=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount}')
 	kubectl -n "$NS" port-forward pod/kv-0 18080:8080 >/dev/null 2>&1 &
-	pf=$!
-	for _ in $(seq 1 50); do curl -s -o /dev/null -m 1 localhost:18080/healthz && break; sleep 0.2; done
+	PF_PID=$!
+	for _ in $(seq 1 50); do
+		if curl -s -o /dev/null -m 1 localhost:18080/healthz; then up=1; break; fi
+		sleep 0.2
+	done
+	if [[ -z "$up" ]]; then
+		say "FAULT NOT TRIGGERED: port-forward to kv-0 never came up"
+		stop_pf
+		return 0
+	fi
 	t0=$(now)
 	curl -s -o /dev/null -m 2 -X POST "localhost:18080/debug/$1"
-	kill "$pf" 2>/dev/null
+	rc=$?
+	stop_pf
+	# crash kills the process mid-request (curl 52 empty reply / 56 reset is expected);
+	# hang answers 200 first, so only 0 is acceptable there.
+	if [[ $rc -ne 0 ]] && ! [[ "$1" == crash && ($rc -eq 52 || $rc -eq 56) ]]; then
+		say "FAULT NOT TRIGGERED: POST /debug/$1 failed (curl exit $rc); is FAULTS=1 set?"
+		return 0
+	fi
 	for _ in $(seq 1 600); do
 		st=$(kubectl -n "$NS" get pod kv-0 -o jsonpath='{.status.containerStatuses[0].restartCount} {.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
 		[[ "$st" == "$((before + 1)) True" ]] && break
