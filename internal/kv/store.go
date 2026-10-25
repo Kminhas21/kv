@@ -3,6 +3,7 @@ package kv
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -20,8 +22,14 @@ var (
 )
 
 type Entry struct {
-	Value   string
-	Version uint64
+	Value     string
+	Version   uint64
+	ExpiresAt int64 // unix nanoseconds; 0 means the key never expires
+}
+
+// expired reports whether e is past its expiry at now (unix nanoseconds).
+func (e Entry) expired(now int64) bool {
+	return e.ExpiresAt != 0 && now >= e.ExpiresAt
 }
 
 type Item struct {
@@ -41,7 +49,14 @@ type walRecord struct {
 	Key     string `json:"key"`
 	Value   string `json:"value,omitempty"`
 	Version uint64 `json:"version"`
+	// Absolute, not a duration, so a restart never extends a key's life.
+	// Absent in older WALs, which therefore replay as permanent keys.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
 }
+
+// maxSweep caps how many keys one sweeper pass deletes per hold of s.mu,
+// so a mass expiry cannot stall writers for long.
+const maxSweep = 1000
 
 // FsyncMode says when a write is acknowledged relative to fsync (WAL_FSYNC).
 type FsyncMode string
@@ -64,6 +79,9 @@ type Store struct {
 	mu       sync.RWMutex
 	data     map[string]Entry
 	revision uint64
+	now      func() time.Time // time.Now; same-package tests inject a fake clock
+
+	stopSweep func() // set by StartSweeper; cancels the sweeper and waits for it
 
 	wal     *os.File
 	bw      *bufio.Writer // batch/always only: the flusher's buffer in front of wal
@@ -81,7 +99,7 @@ type Store struct {
 
 // NewStore returns a memory-only store (nothing survives a restart).
 func NewStore() *Store {
-	return &Store{data: make(map[string]Entry)}
+	return &Store{data: make(map[string]Entry), now: time.Now}
 }
 
 // Open returns a store backed by the WAL at path, replaying any existing
@@ -169,6 +187,10 @@ func (s *Store) replay(f *os.File) error {
 // Close waits for every queued write to be committed, fsyncs and closes the
 // WAL. Writes after Close fail.
 func (s *Store) Close() error {
+	// Before taking s.mu: the sweeper needs s.mu to finish its pass.
+	if s.stopSweep != nil {
+		s.stopSweep()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.wal == nil {
@@ -196,22 +218,41 @@ func (s *Store) Writable() bool {
 func (s *Store) Get(key string) (value string, version uint64, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e, ok := s.data[key]
+	e, ok := s.lookup(key)
 	return e.Value, e.Version, ok
 }
 
-// Put writes value under key. If ifMatch is non-nil, the write only happens
-// when the key's current version equals *ifMatch; a missing key counts as
-// version 0, so *ifMatch == 0 means "create only". On conflict it returns
-// the current version and ErrConflict.
+// lookup returns key's entry, treating an expired key as missing whether or
+// not the sweeper has removed it yet (lazy expiry). Callers must hold s.mu.
+func (s *Store) lookup(key string) (Entry, bool) {
+	e, ok := s.data[key]
+	if !ok || e.expired(s.now().UnixNano()) {
+		return Entry{}, false
+	}
+	return e, true
+}
+
+// Put writes value under key with no expiry. If ifMatch is non-nil, the
+// write only happens when the key's current version equals *ifMatch; a
+// missing (or expired) key counts as version 0, so *ifMatch == 0 means
+// "create only". On conflict it returns the current version and ErrConflict.
 func (s *Store) Put(key, value string, ifMatch *uint64) (version uint64, created bool, err error) {
+	return s.PutTTL(key, value, ifMatch, 0)
+}
+
+// PutTTL is Put with a TTL: the key expires ttl from now. ttl <= 0 makes
+// the key permanent. Every write resets the expiry.
+func (s *Store) PutTTL(key, value string, ifMatch *uint64, ttl time.Duration) (version uint64, created bool, err error) {
 	s.mu.Lock()
-	cur, existed := s.data[key]
+	cur, existed := s.lookup(key)
 	if ifMatch != nil && *ifMatch != cur.Version {
 		s.mu.Unlock()
 		return cur.Version, false, ErrConflict
 	}
 	rec := walRecord{Op: opPut, Key: key, Value: value, Version: s.revision + 1}
+	if ttl > 0 {
+		rec.ExpiresAt = s.now().Add(ttl).UnixNano()
+	}
 	done, err := s.write(rec)
 	s.mu.Unlock()
 	if err == nil && done != nil {
@@ -226,7 +267,7 @@ func (s *Store) Put(key, value string, ifMatch *uint64) (version uint64, created
 // Delete removes key, with the same ifMatch semantics as Put.
 func (s *Store) Delete(key string, ifMatch *uint64) error {
 	s.mu.Lock()
-	cur, existed := s.data[key]
+	cur, existed := s.lookup(key)
 	if ifMatch != nil && *ifMatch != cur.Version {
 		s.mu.Unlock()
 		return ErrConflict
@@ -354,7 +395,12 @@ func (s *Store) err() error {
 func (s *Store) apply(rec walRecord) {
 	switch rec.Op {
 	case opPut:
-		s.data[rec.Key] = Entry{Value: rec.Value, Version: rec.Version}
+		e := Entry{Value: rec.Value, Version: rec.Version, ExpiresAt: rec.ExpiresAt}
+		if e.expired(s.now().UnixNano()) {
+			delete(s.data, rec.Key) // replay: already expired, so the key is gone; revision still advances
+		} else {
+			s.data[rec.Key] = e
+		}
 	case opDelete:
 		delete(s.data, rec.Key)
 	}
@@ -365,11 +411,64 @@ func (s *Store) List(prefix string) []Item {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := []Item{}
+	now := s.now().UnixNano()
 	for key, e := range s.data {
-		if strings.HasPrefix(key, prefix) {
+		if strings.HasPrefix(key, prefix) && !e.expired(now) {
 			items = append(items, Item{Key: key, Value: e.Value, Version: e.Version})
 		}
 	}
 	slices.SortFunc(items, func(a, b Item) int { return cmp.Compare(a.Key, b.Key) })
 	return items
+}
+
+// StartSweeper starts a goroutine that removes expired keys from memory
+// every interval (active expiry). Call it at most once, before the store is
+// shared; Close stops it.
+func (s *Store) StartSweeper(interval time.Duration) {
+	t := time.NewTicker(interval)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer t.Stop()
+		s.sweepLoop(ctx, t.C)
+	}()
+	s.stopSweep = sync.OnceFunc(func() { cancel(); <-done })
+}
+
+// sweepLoop sweeps on every tick until ctx is cancelled. Ticks are a
+// parameter so tests can drive it without a real ticker.
+func (s *Store) sweepLoop(ctx context.Context, ticks <-chan time.Time) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			for s.sweepChunk() == maxSweep {
+			}
+		}
+	}
+}
+
+// sweepChunk deletes up to maxSweep expired keys under one hold of the
+// write lock and reports how many it deleted. Expiry writes no WAL record
+// and does not bump the revision: readers already treat the key as missing,
+// and replay drops expired records by itself.
+// shortcut: scans the map from the start on every chunk (O(keys)); sample
+// keys like Redis or keep an expiry heap if the store grows to millions.
+func (s *Store) sweepChunk() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UnixNano()
+	n := 0
+	for key, e := range s.data {
+		if n == maxSweep {
+			break
+		}
+		if e.expired(now) {
+			delete(s.data, key)
+			n++
+		}
+	}
+	return n
 }

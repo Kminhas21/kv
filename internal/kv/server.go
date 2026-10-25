@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 func NewHandler(s *Store) http.Handler {
@@ -18,12 +19,17 @@ func NewHandler(s *Store) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		ttl, err := parseTTL(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		version, created, err := s.Put(r.PathValue("key"), string(body), ifMatch)
+		version, created, err := s.PutTTL(r.PathValue("key"), string(body), ifMatch, ttl)
 		if errors.Is(err, ErrConflict) {
 			writeConflict(w, version)
 			return
@@ -93,6 +99,19 @@ func parseIfMatch(r *http.Request) (*uint64, error) {
 		return nil, fmt.Errorf("invalid If-Match %q: must be a version number", h)
 	}
 	return &v, nil
+}
+
+// parseTTL returns 0 (permanent) when ?ttl= is absent.
+func parseTTL(r *http.Request) (time.Duration, error) {
+	q := r.URL.Query()
+	if !q.Has("ttl") {
+		return 0, nil
+	}
+	ttl, err := time.ParseDuration(q.Get("ttl"))
+	if err != nil || ttl <= 0 {
+		return 0, fmt.Errorf("invalid ttl %q: must be a positive duration like 30s", q.Get("ttl"))
+	}
+	return ttl, nil
 }
 
 func setVersion(w http.ResponseWriter, version uint64) {

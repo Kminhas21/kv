@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Kminhas21/kv/internal/kv"
 	"github.com/Kminhas21/kv/internal/serve"
@@ -19,11 +20,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	sweepEvery, err := time.ParseDuration(envOr("TTL_SWEEP_INTERVAL", "1s"))
+	if err != nil || sweepEvery <= 0 {
+		slog.Error("invalid TTL_SWEEP_INTERVAL: want a positive duration like 1s", "value", os.Getenv("TTL_SWEEP_INTERVAL"))
+		os.Exit(1)
+	}
+
 	store, err := kv.Open(walPath, fsync)
 	if err != nil {
 		slog.Error("open store", "wal", walPath, "err", err)
 		os.Exit(1)
 	}
+	store.StartSweeper(sweepEvery)
 
 	slog.Info("kv listening", "addr", addr, "wal", walPath, "fsync", fsync)
 	err = serve.Run(ctx, "kv", addr, kv.NewHandler(store))

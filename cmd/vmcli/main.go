@@ -25,7 +25,8 @@ VMs (vmctl):
 
 kv store:
   kv get <key>                        print a value (version goes to stderr)
-  kv put [-if-match N] <key> <value>  write a value (-if-match 0 = create only)
+  kv put [-if-match N] [-ttl D] <key> <value>
+                                      write a value (-if-match 0 = create only, -ttl 5s = expire)
   kv del [-if-match N] <key>          delete a key
   kv list [prefix]                    list keys under a prefix
 
