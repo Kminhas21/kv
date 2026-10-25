@@ -23,6 +23,7 @@ type system struct {
 	svc  *vm.Service
 	hv   *mockhv.Hypervisor
 	hvc  *hvclient.Client
+	kvc  *kvclient.Client
 }
 
 const hvTimeout = 200 * time.Millisecond
@@ -35,11 +36,12 @@ func newSystem(t *testing.T) *system {
 	hvSrv := httptest.NewServer(hv.Handler())
 	t.Cleanup(hvSrv.Close)
 
-	repo := vm.NewRepo(kvclient.New(kvSrv.URL))
+	kvc := kvclient.New(kvSrv.URL)
+	repo := vm.NewRepo(kvc)
 	if err := vm.SeedHosts(context.Background(), repo, vm.DefaultHosts()); err != nil {
 		t.Fatal(err)
 	}
-	return &system{t: t, repo: repo, svc: vm.NewService(repo), hv: hv, hvc: hvclient.New(hvSrv.URL, hvTimeout)}
+	return &system{t: t, repo: repo, svc: vm.NewService(repo), hv: hv, hvc: hvclient.New(hvSrv.URL, hvTimeout), kvc: kvc}
 }
 
 // newReconciler is a fresh controller with no memory of its own, exactly

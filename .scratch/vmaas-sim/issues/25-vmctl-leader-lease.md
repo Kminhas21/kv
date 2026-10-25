@@ -4,15 +4,15 @@
 
 **Blocked by:** 23, 20 (the leader releases its lease on shutdown)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Acquire: PUT `If-Match: 0` with `ttl=10s`, value = this replica's identity (pod name). Renew every 3s with If-Match on the held version
-- [ ] Before each reconcile tick the leader confirms it still holds the lease; on a lost renewal it stops reconciling immediately
-- [ ] Followers keep retrying acquisition; on graceful shutdown the leader deletes its lease so handoff is immediate
-- [ ] Lease TTL and renew interval come from config; logs say when this replica gains or loses leadership
-- [ ] vmctl Deployment at 3 replicas; the Service balances API traffic across all of them
-- [ ] Harness test: 3 in-process vmctls, exactly one reconciles; stop the leader, another takes over; no VM is provisioned twice
-- [ ] Demo script: kill the leader pod mid-provisioning, show the new leader finishing the work
+- [x] Acquire: PUT `If-Match: 0` with `ttl=10s`, value = this replica's identity (pod name). Renew every 3s with If-Match on the held version
+- [x] Before each reconcile tick the leader confirms it still holds the lease; on a lost renewal it stops reconciling immediately
+- [x] Followers keep retrying acquisition; on graceful shutdown the leader deletes its lease so handoff is immediate
+- [x] Lease TTL and renew interval come from config; logs say when this replica gains or loses leadership
+- [x] vmctl Deployment at 3 replicas; the Service balances API traffic across all of them
+- [x] Harness test: 3 in-process vmctls, exactly one reconciles; stop the leader, another takes over; no VM is provisioned twice
+- [x] Demo script: kill the leader pod mid-provisioning, show the new leader finishing the work
 
 **Concepts:** leases vs locks, renewal deadlines, why a stale leader is the classic split-brain bug, how compare-and-swap on VM records limits the damage.
 

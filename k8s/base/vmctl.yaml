@@ -2,17 +2,17 @@
 # holds no state of its own: everything is in kv. Kill it at any moment and
 # the replacement pod continues from kv.
 #
-# replicas: 1 on purpose. Two replicas would run two reconcilers; compare-
-# and-swap keeps that safe from overbooking, but they would race and waste
-# work. Production runs several with leader election (a Kubernetes Lease) so
-# only one reconciles at a time; see Week 2 in PLAN.md.
+# 3 replicas, all serving the API behind the Service. Only the leader, the
+# replica holding the kv key leases/vmctl (LEASE_TTL, renewed every
+# LEASE_RENEW), runs the reconciler. If it dies, another replica takes over
+# within about one TTL. See docs/adr/0002-kv-backed-leader-lease.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vmctl
   namespace: vmaas
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: vmctl
@@ -35,6 +35,10 @@ spec:
           env:
             - name: ADDR
               value: ":8090"
+            # Lease holder identity: the pod name, via the Downward API.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
           envFrom:
             - configMapRef:
                 name: vmaas-config

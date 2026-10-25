@@ -20,6 +20,11 @@ data:
   # (kv.snap and kv.wal.<revision> appear next to WAL_PATH). 0 disables.
   SNAPSHOT_EVERY: "100000"
   RECONCILE_INTERVAL: "2s"
+  # vmctl leader lease: the key expires LEASE_TTL after the last renewal; the
+  # leader renews every LEASE_RENEW and stops reconciling one renew interval
+  # before the TTL could run out.
+  LEASE_TTL: "10s"
+  LEASE_RENEW: "3s"
   # HV_TIMEOUT must be shorter than HANG_FOR, or a "lost response" would
   # simply be a slow response.
   HV_TIMEOUT: "3s"

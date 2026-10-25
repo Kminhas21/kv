@@ -54,7 +54,19 @@ create() {
 hv_count() { vmcli hv vms -external-id "vmaas-$1" 2>/dev/null | grep -c "vmaas-$1"; }
 op_field() { vmcli op get "$1" | tr -s ' ' '\n' | sed -n "s/^$2=//p"; }
 phase() { vmcli vm get "$1" | awk '/^phase:/{print $2}'; }
-pod_of() { kubectl -n "$NS" get pods -l "app=$1" -o jsonpath='{.items[0].metadata.name}'; }
+# The vmctl leader: the pod name stored in the lease key (empty if none).
+leader() { vmcli kv get leases/vmctl 2>/dev/null; }
+# wait_new_leader OLD TIMEOUT_SECONDS -> sets NEW_LEADER once someone else holds the lease
+wait_new_leader() {
+	local i
+	NEW_LEADER=
+	for ((i = 0; i < $2 * 2; i++)); do
+		NEW_LEADER=$(leader)
+		[[ -n "$NEW_LEADER" && "$NEW_LEADER" != "$1" ]] && return 0
+		sleep 0.5
+	done
+	return 1
+}
 wait_ready() {
 	kubectl -n "$NS" rollout status "$1" --timeout=120s >/dev/null &&
 		kubectl -n "$NS" wait --for=condition=Ready pod -l "app=$2" --timeout=120s >/dev/null
@@ -113,15 +125,16 @@ check "VM reached Running" test "$(phase "$LOST")" = Running
 check "exactly 1 VM on the hypervisor (no duplicate)" test "$(hv_count "$LOST")" -eq 1
 check "only 1 create attempt was needed" test "$(op_field "$OP" attempts)" = 1
 say "What vmctl logged for this VM:"
-kubectl -n "$NS" logs deploy/vmctl | grep "$LOST" | grep -E "unknown|adopting" | cut -c21- | sed -E 's/ (external_id|op_id)=[^ ]+//g'
+kubectl -n "$NS" logs "$(leader)" | grep "$LOST" | grep -E "unknown|adopting" | cut -c21- | sed -E 's/ (external_id|op_id)=[^ ]+//g'
 pause
 
 # ---------------------------------------------------------------------------
 bold "4. Crash the control plane in the middle of provisioning"
 say "We slow the hypervisor down (create takes ~10s), request a VM, wait until a"
-say "create task is in flight, then force-kill the vmctl pod (no graceful exit,"
-say "like a node crash). Kubernetes starts a replacement pod. Because every step"
-say "was saved in kv, the new pod polls the saved task instead of creating again."
+say "create task is in flight, then force-kill the vmctl LEADER (no graceful exit,"
+say "like a node crash, so it never releases its lease). Another replica takes the"
+say "lease once it expires (LEASE_TTL 10s). Because every step was saved in kv, the"
+say "new leader polls the saved task instead of creating again."
 run hv faults -create-delay 8s
 create "demo-crash-$RUN"
 CRASH=$VM CRASH_OP=$OP
@@ -131,13 +144,15 @@ for _ in $(seq 1 30); do
 	sleep 1
 done
 say "create task in flight: $TASK"
-OLD_POD=$(pod_of vmctl)
+OLD_POD=$(leader)
 printf '\033[36m$ kubectl -n %s delete pod %s --grace-period=0 --force\033[0m\n' "$NS" "$OLD_POD"
 kubectl -n "$NS" delete pod "$OLD_POD" --grace-period=0 --force 2>/dev/null
+START=$SECONDS
+wait_new_leader "$OLD_POD" 60
+NEW_POD=$NEW_LEADER
+say "old leader: $OLD_POD   new leader: $NEW_POD (after ~$((SECONDS - START))s, waiting out the TTL)"
+check "another replica took the lease after the crash" test -n "$NEW_POD" -a "$NEW_POD" != "$OLD_POD"
 wait_ready deployment/vmctl vmctl
-NEW_POD=$(pod_of vmctl)
-say "old pod: $OLD_POD   new pod: $NEW_POD"
-check "Kubernetes replaced the vmctl pod" test "$NEW_POD" != "$OLD_POD"
 # vmcli's watch exits on the first connection error (vmctl just restarted), so
 # poll the phase ourselves instead of trusting a single watch.
 wait_phase() { # wait_phase VM PHASE TIMEOUT_SECONDS
@@ -152,7 +167,7 @@ vmcli vm watch -until Running -timeout 90s "$CRASH" 2>/dev/null
 check "VM reached Running after the crash" wait_phase "$CRASH" Running 90
 check "exactly 1 VM on the hypervisor" test "$(hv_count "$CRASH")" -eq 1
 check "still only 1 create attempt (the new pod polled the saved task)" test "$(op_field "$CRASH_OP" attempts)" = 1
-say "What the NEW vmctl pod logged for this VM (no 'create submitted' line):"
+say "What the NEW leader logged for this VM (no 'create submitted' line):"
 kubectl -n "$NS" logs "$NEW_POD" | grep "$CRASH" | cut -c21- | sed -E 's/ (external_id|op_id)=[^ ]+//g'
 run hv faults -create-delay 0s >/dev/null
 pause
@@ -251,6 +266,40 @@ check "hang recovery ${HANG_S}s <= 10s" under10 "$HANG_S"
 wait_ready statefulset/kv kv
 say "Summary: crash ${CRASH_S}s, hang ${HANG_S}s"
 check "VM records survived both restarts" test "$(vmcli vm list | grep -c "demo-")" -eq "$BEFORE"
+pause
+
+# ---------------------------------------------------------------------------
+bold "7. Kill the leader mid-provisioning"
+say "vmctl runs 3 replicas. All serve the API; only the leader, the pod named in"
+say "the kv key leases/vmctl, runs the reconciler. We start a slow create, delete"
+say "the leader pod, and watch another replica take the lease and finish the VM."
+say "A graceful delete makes the leader release the lease on its way out, so the"
+say "handoff is quick; a crash would mean waiting out the 10s LEASE_TTL instead."
+run hv faults -create-delay 8s
+create "demo-leader-$RUN"
+LVM=$VM LOP=$OP
+for _ in $(seq 1 30); do
+	TASK=$(op_field "$LOP" task)
+	[[ -n "$TASK" && "$TASK" != - ]] && break
+	sleep 1
+done
+say "create task in flight: $TASK"
+OLD_LEADER=$(leader)
+say "leader: $OLD_LEADER"
+printf '\033[36m$ kubectl -n %s delete pod %s\033[0m\n' "$NS" "$OLD_LEADER"
+kubectl -n "$NS" delete pod "$OLD_LEADER" --wait=false >/dev/null
+START=$SECONDS
+wait_new_leader "$OLD_LEADER" 30
+say "new leader: $NEW_LEADER (after ~$((SECONDS - START))s)"
+check "another replica became leader" test -n "$NEW_LEADER" -a "$NEW_LEADER" != "$OLD_LEADER"
+check "VM reached Running under the new leader" wait_phase "$LVM" Running 90
+check "exactly 1 VM on the hypervisor" test "$(hv_count "$LVM")" -eq 1
+check "still only 1 create attempt" test "$(op_field "$LOP" attempts)" = 1
+say "Lease log lines from the old and new leader:"
+for p in "$OLD_LEADER" "$NEW_LEADER"; do
+	kubectl -n "$NS" logs "$p" 2>/dev/null | grep -E "leader|leadership" | cut -c21- | sed "s/^/[$p] /"
+done
+run hv faults -create-delay 0s >/dev/null
 pause
 
 # ---------------------------------------------------------------------------

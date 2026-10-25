@@ -55,7 +55,7 @@ demo:
 	bash scripts/demo.sh
 
 logs:
-	kubectl -n $(NS) logs -f deployment/vmctl
+	kubectl -n $(NS) logs -f -l app=vmctl --prefix --max-log-requests 5
 
 # Makes vmctl, kv and mockhv reachable on localhost for vmcli. Runs until Ctrl+C.
 forward:
