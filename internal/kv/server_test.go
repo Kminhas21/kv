@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"errors"
 	"context"
 	"encoding/json"
 	"io"
@@ -43,6 +44,35 @@ func TestReadyzUnwritableStore(t *testing.T) {
 	s.Close()
 	if got := readyz(); got != http.StatusServiceUnavailable {
 		t.Fatalf("readyz after Close = %d, want 503", got)
+	}
+}
+
+func TestHealthzFailsWhenPoisonedNotWhenClosed(t *testing.T) {
+	healthz := func(s *Store) int {
+		rec := httptest.NewRecorder()
+		NewHandler(s).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+		return rec.Code
+	}
+	open := func() *Store {
+		s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := open()
+	if got := healthz(s); got != http.StatusOK {
+		t.Fatalf("healthz = %d, want 200", got)
+	}
+	s.Close()
+	if got := healthz(s); got != http.StatusOK {
+		t.Fatalf("healthz after Close = %d, want 200", got)
+	}
+	p := open()
+	defer p.Close()
+	p.poison(errors.New("disk on fire"))
+	if got := healthz(p); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz on poisoned store = %d, want 503", got)
 	}
 }
 

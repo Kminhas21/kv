@@ -84,7 +84,15 @@ func NewHandler(s *Store) http.Handler {
 	})
 
 	ok := func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }
-	mux.HandleFunc("GET /healthz", ok)
+	// Liveness fails on an I/O-poisoned store so kubelet restarts the pod;
+	// a store merely closed for shutdown stays live.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if s.Poisoned() {
+			http.Error(w, "store poisoned by an I/O error", http.StatusServiceUnavailable)
+			return
+		}
+		ok(w, r)
+	})
 	// Not-ready-until-replay holds by construction: cmd/kv opens the store
 	// (replaying the WAL) before it starts listening, so nothing answers
 	// /readyz until replay is done. After that, a poisoned store is unready.

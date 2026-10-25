@@ -245,6 +245,14 @@ func (s *Store) Writable() bool {
 	return s.err() == nil
 }
 
+// Poisoned reports whether an I/O failure (not a mere Close) broke the
+// store. Liveness uses it: only a restart, with replay and torn-tail
+// repair, recovers a poisoned store.
+func (s *Store) Poisoned() bool {
+	err := s.err()
+	return err != nil && !errors.Is(err, errClosed)
+}
+
 func (s *Store) Get(key string) (value string, version uint64, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

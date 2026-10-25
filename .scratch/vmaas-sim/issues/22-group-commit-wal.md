@@ -18,7 +18,7 @@
 
 **Concepts:** group commit, a reply channel (`chan error`) per request, a single-writer goroutine, `bufio.Writer` + `File.Sync`, why the lock must not cover I/O, durability vs latency.
 
-**Mock vs production:** etcd and PostgreSQL both batch fsyncs (group commit). etcd applies entries only after the Raft commit, so it has no "visible before durable" window; ours does, by design (ADR-0001). Real systems also use O_DSYNC and preallocated segment files.
+**Mock vs production:** etcd and PostgreSQL both batch fsyncs (group commit). etcd applies entries only after the Raft commit, so it has no "visible before durable" window; ours does, by design (ADR-0001). On an fsync failure etcd and PostgreSQL crash rather than carry on ("fsyncgate": after a failed fsync the kernel may have dropped the dirty pages, so retrying can silently lose data); ours poisons the store, fails `/healthz` so kubelet restarts the pod, and recovery is WAL replay plus torn-tail repair. Real systems also use O_DSYNC and preallocated segment files.
 
 **Manual check:** run kv in each mode, hammer it with concurrent PUTs, compare throughput; kill -9 the process mid-load and confirm every key that got a 2xx is present after restart.
 
