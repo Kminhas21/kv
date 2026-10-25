@@ -5,7 +5,7 @@ NS      := vmaas
 # Git Bash rewrites /unix/paths in arguments; this turns that off for docker/kubectl.
 export MSYS_NO_PATHCONV := 1
 
-.PHONY: test kind-up kind-down image load deploy redeploy up status logs forward wait demo
+.PHONY: test kind-up kind-down image load deploy redeploy up status logs forward wait demo gke-check gke-up gke-down
 
 test:
 	go vet ./...
@@ -26,7 +26,7 @@ load: image
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
 
 deploy:
-	kubectl apply -k k8s/
+	kubectl apply -k k8s/overlays/kind
 
 # After a code change: rebuild, load, and restart the pods so they run it.
 # (The tag stays "dev", so Kubernetes would not notice a new image by itself.)
@@ -58,3 +58,34 @@ forward:
 	kubectl -n $(NS) port-forward svc/kv 8080:8080 & \
 	kubectl -n $(NS) port-forward svc/mockhv 8081:8081 & \
 	wait
+
+# ---- GKE Autopilot (COSTS MONEY: always run gke-down when done) ----
+# Usage: make gke-up PROJECT_ID=my-project TF_STATE_BUCKET=my-state-bucket
+REGION          ?= us-central1
+PROJECT_ID      ?=
+TF_STATE_BUCKET ?=
+TAG             := $(shell git rev-parse --short HEAD)
+GKE_IMAGE       := $(REGION)-docker.pkg.dev/$(PROJECT_ID)/vmaas/vmaas-sim:$(TAG)
+TF_DIR          := infra/envs/dev
+TF_INIT         := terraform -chdir=$(TF_DIR) init -input=false -backend-config="bucket=$(TF_STATE_BUCKET)"
+TF_VARS         := -var project_id=$(PROJECT_ID) -var region=$(REGION)
+
+gke-check:
+	@test -n "$(PROJECT_ID)" -a -n "$(TF_STATE_BUCKET)" || { echo "set PROJECT_ID and TF_STATE_BUCKET"; exit 1; }
+
+# The overlay holds REGION/PROJECT_ID/IMAGE_TAG placeholders; sed fills them in.
+gke-up: gke-check
+	@start=$$(date +%s); set -e; \
+	$(TF_INIT); \
+	terraform -chdir=$(TF_DIR) apply -input=false -auto-approve $(TF_VARS); \
+	gcloud auth configure-docker $(REGION)-docker.pkg.dev --quiet; \
+	docker build -t $(GKE_IMAGE) .; \
+	docker push $(GKE_IMAGE); \
+	gcloud container clusters get-credentials vmaas --region $(REGION) --project $(PROJECT_ID); \
+	kubectl kustomize k8s/overlays/gke | sed -e 's/REGION/$(REGION)/' -e 's/PROJECT_ID/$(PROJECT_ID)/' -e 's/IMAGE_TAG/$(TAG)/' | kubectl apply -f -; \
+	$(MAKE) wait; \
+	echo "gke-up took $$(( $$(date +%s) - start ))s"
+
+gke-down: gke-check
+	$(TF_INIT)
+	terraform -chdir=$(TF_DIR) destroy -input=false -auto-approve $(TF_VARS)

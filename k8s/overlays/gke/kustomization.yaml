@@ -1,0 +1,24 @@
+# GKE Autopilot. REGION/PROJECT_ID/IMAGE_TAG are substituted by `make gke-up`
+# (sed) so this file never needs editing. The storageClass is left unset on
+# purpose: the cluster default (pd-balanced via CSI) is used. Autopilot needs
+# resource requests, which the base already sets.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: vmaas-sim
+    newName: REGION-docker.pkg.dev/PROJECT_ID/vmaas/vmaas-sim
+    newTag: IMAGE_TAG
+# Fresh nodes pull from a registry: always check the tag.
+patches:
+  - target: { kind: StatefulSet }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+  - target: { kind: Deployment }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
