@@ -13,7 +13,7 @@ test:
 
 # In-process benchmarks; the replay one builds a 1M-record WAL (takes a while).
 bench:
-	KV_BENCH_REPLAY_N=1000000 go test -run '^$$' -bench Replay1M -benchtime 3x -timeout 30m ./internal/kv
+	KV_BENCH_REPLAY_N=1000000 go test -run '^$$' -bench Replay -benchtime 3x -timeout 30m ./internal/kv
 	go test -run '^$$' -bench 'Get|Put' -count 3 ./internal/kv
 
 kind-up:

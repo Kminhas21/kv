@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -39,9 +40,9 @@ func buildWAL(b *testing.B, path string, n int, snapEvery uint64) {
 	}
 }
 
-// BenchmarkReplay1M times Open (restart) on a WAL of KV_BENCH_REPLAY_N records
+// BenchmarkReplay times Open (restart) on a WAL of KV_BENCH_REPLAY_N records
 // (default 10k so the CI smoke stays fast; `make bench` sets 1000000).
-func BenchmarkReplay1M(b *testing.B) {
+func BenchmarkReplay(b *testing.B) {
 	n := 10_000
 	if v := os.Getenv("KV_BENCH_REPLAY_N"); v != "" {
 		var err error
@@ -73,9 +74,35 @@ func BenchmarkReplay1M(b *testing.B) {
 				if len(s.data) != n {
 					b.Fatalf("recovered %d keys, want %d", len(s.data), n)
 				}
+				b.StopTimer()
 				s.Close()
+				b.StartTimer()
 			}
 			b.ReportMetric(float64(n)*float64(b.N)/b.Elapsed().Seconds(), "records/s")
+		})
+	}
+}
+
+// BenchmarkPutBatchWriters varies the number of concurrent writers in batch
+// mode (GOMAXPROCS x p). More writers share each fsync, so ops/s rises.
+func BenchmarkPutBatchWriters(b *testing.B) {
+	for _, p := range []int{1, 2, 8} {
+		b.Run("x"+strconv.Itoa(p), func(b *testing.B) {
+			s, err := Open(filepath.Join(b.TempDir(), "kv.wal"), FsyncBatch, 0)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer s.Close()
+			var n atomic.Int64
+			b.SetParallelism(p)
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if _, _, err := s.Put("k"+strconv.FormatInt(n.Add(1)%1024, 10), "value", nil); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			})
 		})
 	}
 }

@@ -17,30 +17,53 @@ but this is a laptop; see the variance notes. No kind cluster involved.
 
 ### Results against targets
 
-Each HTTP number is the median of 3 runs of 10s (range in brackets); kvbench
-used `-c 64 -keys 10000 -size 128`. Percentiles are the median of the three
-runs' percentiles.
+Every number below is the median of 3 runs (range in brackets), all taken in
+one session. HTTP runs are 10s each with kvbench `-c 64 -keys 10000 -size 128`;
+percentiles are the median of the three runs' percentiles. kvbench counts only
+successful requests in ops/s and latency, and exits non-zero above 0.1%
+errors. **Errors: 0 in all 12 HTTP runs.**
 
 | Target | Config | Measured | Met? |
 |--------|--------|----------|------|
-| 50K reads/s | fsync=batch, `-reads 100` | 54.5K/s [52.9K-54.8K] | met (barely, see notes) |
-| p99 < 1ms | same run | p50 1.01ms, p99 4.50ms, p999 7.3ms | not met |
-| 14K writes/s | fsync=batch, `-reads 0` | 33.9K/s [33.8K-34.6K], p99 3.7ms | met |
-| (info) | fsync=off, `-reads 0` | 51.6K/s [45.7K-59.6K], p99 3.7ms | n/a |
-| (info) | fsync=always, `-reads 0` | 1.51K/s [1.50K-1.51K], p99 61ms | n/a |
-| 1M replay < 3s | Open, WAL only, 1M records | 1.22s [1.21-1.23] | met |
-| (info) | Open, snapshot (999K keys) + 1K-record tail | 1.05s [1.01-1.10] | met |
+| 50K reads/s | fsync=batch, `-reads 100` | 72.2K/s [70.1K-72.6K] | met |
+| p99 < 1ms | same runs | p50 0.67ms, p99 3.83ms, p999 5.95ms | not met |
+| 14K writes/s | fsync=batch, `-reads 0` | 26.3K/s [26.2K-27.6K], p99 6.4ms | met |
+| (info) | fsync=off, `-reads 0` | 54.8K/s [53.3K-56.1K], p99 3.65ms | n/a |
+| (info) | fsync=always, `-reads 0` | 915/s [781-934], p99 198ms | n/a |
+| 1M replay < 3s | Open, WAL only, 1M records | 2.19s [2.14-2.47] | met (see variance) |
+| (info) | Open, snapshot (999K keys) + 1K-record tail | 2.35s [2.03-2.40] | met (see variance) |
 
-In-process (`testing.B`, no HTTP, 32 parallel goroutines, 5 runs each):
+In-process (`testing.B`, no HTTP, 32 parallel goroutines, `-count 3`):
 
 | Benchmark | ns/op | Implied ops/s |
 |-----------|-------|---------------|
-| `BenchmarkGet` | 140-157 | ~6.5M |
-| `BenchmarkPut/off` | 3190-3390 | ~300K |
-| `BenchmarkPut/batch` | 36.7K-42.8K | ~25K |
-| `BenchmarkPut/always` | 579K-667K | ~1.6K |
+| `BenchmarkGet` | 68-90 | ~12M |
+| `BenchmarkPut/off` | 7.5K-8.7K | ~130K |
+| `BenchmarkPut/batch` | 72K-96K | ~12K |
+| `BenchmarkPut/always` | 1.26M-1.43M | ~750 |
+| `BenchmarkPutBatchWriters/x1` (32 writers) | 76K-89K | ~12K |
+| `BenchmarkPutBatchWriters/x2` (64 writers) | 34K-46K | ~26K |
+| `BenchmarkPutBatchWriters/x8` (256 writers) | 11K-12K | ~87K |
 
-Replay in records/s: ~0.82M (WAL only), ~0.95M (snapshot + tail).
+Replay in records/s: 0.40M-0.47M (WAL only), 0.42M-0.49M (snapshot + tail).
+The snapshot variant is not faster here; the difference is inside the noise.
+
+Raw per-run numbers and an earlier series are in the appendix at the end of
+this section.
+
+**Why HTTP batch writes can beat in-process `BenchmarkPut/batch`.** In batch
+mode one fsync covers every record queued while the previous fsync ran, so
+throughput scales with the number of concurrent writers. `BenchmarkPut` runs
+GOMAXPROCS (32) writers; kvbench runs 64. `BenchmarkPutBatchWriters` shows the
+effect directly: doubling the writers from 32 to 64 roughly halved ns/op
+(76-89us to 34-46us), and 256 writers reached 11-12us. So a 64-writer HTTP
+load beating a 32-writer in-process one is a batch-size effect (more records
+per fsync), not evidence that HTTP is faster than a function call. The 1024-key
+space and `fmt.Sprintf` in `BenchmarkPut` cost well under a microsecond next
+to an fsync-bound ~80us op, so I did not isolate them. Caveat: the HTTP and
+in-process series were taken minutes apart on a machine whose speed drifted
+(see variance), so compare the scaling within `BenchmarkPutBatchWriters`, not
+the absolute numbers across tables.
 
 ### Commands
 
@@ -55,13 +78,13 @@ WAL_PATH=$(mktemp -d)/kv.wal WAL_FSYNC=batch ADDR=:18080 ./kv.exe
 ./kvbench.exe -addr http://localhost:18080 -reads 0     # fsync=off|always|batch
 
 # in-process
-go test -run '^$' -bench 'Get|Put' -count 5 ./internal/kv
-KV_BENCH_REPLAY_N=1000000 go test -run '^$' -bench Replay1M -benchtime 1x -count 5 -timeout 30m ./internal/kv
-make bench     # the same two (replay at -benchtime 3x, Get/Put at -count 3)
+go test -run '^$' -bench 'Get|Put' -count 3 ./internal/kv
+KV_BENCH_REPLAY_N=1000000 go test -run '^$' -bench Replay -benchtime 1x -count 3 -timeout 30m ./internal/kv
+make bench     # the same two (replay at -benchtime 3x)
 ```
 
-`BenchmarkReplay1M` builds its WAL(s) once per run in a temp dir, then times
-only `Open`. The snapshot variant is produced by the real snapshot machinery
+`BenchmarkReplay` (N is in the sub-benchmark name) builds its WAL(s) once per run in a temp dir, then times
+only `Open` (the `Close` after each iteration is outside the timed region). The snapshot variant is produced by the real snapshot machinery
 (`snapshotEvery = N-1000`), so it replays a snapshot plus a 1000-record tail.
 The size defaults to 10K records so the CI smoke command
 (`go test -run '^$' -bench . -benchtime 1x ./...`, about 8s wall) stays fast;
@@ -78,24 +101,53 @@ the 1M numbers above come from `KV_BENCH_REPLAY_N=1000000`.
   constant-arrival-rate) exist for exactly this; kvbench does not do it.
 - **Client and server share the machine.** They compete for CPU and the
   loopback stack, so reads/s and latency mix server cost with client cost.
-  With 64 connections, p50 of about 1ms is what Little's law gives at ~54K/s
-  (64 / 54K = 1.2ms); the generator and Windows loopback are likely a large
-  part of the 4.5ms p99 and the read ceiling. I did not profile it, and I did
-  not tune the server for any target.
-- **Reads barely clear 50K/s** and fsync mode does not affect them, so read
-  "met" as "about 50K on this machine in this setup", not as headroom.
-- **fsync=off writes** vary the most (45.7K-59.6K, one run with a 116ms max).
-- **Replay variance.** The 1.2s figure is from a quiet 5-run series. Earlier
-  series on the same machine, while it was busier, took 3.5-4.4s and 1.4-1.6s
-  for the same WAL, so "< 3s" is met in the recorded series but is not robust
-  to a loaded machine. In-process Put numbers also moved by up to ~3x between
-  series (Put/off 3.2us vs 12us).
+  With 64 connections, Little's law ties p50 to throughput (64 / 72K =
+  0.9ms); the generator and Windows loopback are likely a large part of the
+  ~3.8ms p99 and the read ceiling. I did not profile it, and I did not tune
+  the server for any target.
+- **Run-to-run and session-to-session variance is large.** An earlier series
+  (appendix) on the same machine gave 54.5K reads/s and 33.9K batch writes/s
+  over HTTP, and 1.2s replay; the recorded series gave 72.2K, 26.3K and 2.2s.
+  Replay has also taken 3.5-4.4s in a busier session. Treat every figure as
+  "this order of magnitude on this laptop", and note "< 3s" replay was met in
+  every recorded series but one (the busy one) and is not robust to load.
+  `fsync=always` swings the most (781-934/s here, 1.5K/s earlier).
 - `fsync=always` is bounded by NTFS `FlushFileBuffers` latency on one NVMe
-  (about 0.6ms per sync).
+  (roughly 0.6-1.4ms per sync across series).
 - Mock vs production: real load tests use separate generator machines, open
   loop, and a network between the two; here everything is one box on loopback
   with a single-node in-memory map and a local WAL, not a replicated store
   like etcd.
+
+<details>
+<summary>Appendix: raw per-run numbers</summary>
+
+HTTP (ops/s, p99), recorded series. Errors were 0 in every run.
+
+| Config | Run 1 | Run 2 | Run 3 |
+|--------|-------|-------|-------|
+| batch, reads 100 | 72628, 3.86ms | 72249, 3.80ms | 70128, 3.83ms |
+| off, writes | 53334, 3.68ms | 56082, 3.55ms | 54813, 3.65ms |
+| always, writes | 781, 273ms | 915, 164ms | 934, 198ms |
+| batch, writes | 27607, 5.14ms | 26200, 6.42ms | 26293, 9.46ms |
+
+In-process ns/op: Get 67.7, 77.0, 89.8. Put/off 7515, 7835, 8664. Put/always
+1261591, 1376332, 1432272. Put/batch 72385, 85810, 96193.
+PutBatchWriters x1 88604, 78126, 76120; x2 34378, 33715, 46447; x8 11177,
+11546, 12094.
+
+Replay of 1M records, ns/op: WAL only 2135357000, 2187712100, 2474007400;
+snapshot + tail 2399293600, 2032084300, 2349005000.
+
+Earlier series (same machine, before the kvbench change that excludes failed
+requests; zero errors were reported then too, so the counts were unaffected):
+reads batch 54481/54790/52856 ops/s (p99 4.45-4.66ms); writes off
+59590/51610/45694; always 1500/1508/1510; batch 34600/33814/33892.
+In-process Put/off 3.2us, Put/always ~620us, Put/batch ~39us, Get 140-157ns;
+replay 1.21-1.23s (WAL only), 1.01-1.10s (snapshot + tail), 5 runs. A third,
+busier series gave replay 3.5-4.4s.
+
+</details>
 
 ## Self-heal (kind)
 

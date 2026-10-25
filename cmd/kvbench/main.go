@@ -95,10 +95,11 @@ func main() {
 				}
 				t0 := time.Now()
 				ok := do(method, url(rand.IntN(*keys)))
-				lats[w] = append(lats[w], time.Since(t0))
 				if !ok {
 					errs[w]++
+					continue // failed requests are not latency or throughput samples
 				}
+				lats[w] = append(lats[w], time.Since(t0))
 			}
 		}()
 	}
@@ -113,10 +114,14 @@ func main() {
 	}
 	slices.Sort(all)
 	fmt.Printf("c=%d d=%s reads=%d%% keys=%d size=%dB\n", *c, *d, *reads, *keys, *size)
-	fmt.Printf("ops/s=%.0f total=%d errors=%d\n", float64(len(all))/elapsed.Seconds(), len(all), nerr)
+	fmt.Printf("ops/s=%.0f ok=%d errors=%d (ops/s counts successes only)\n", float64(len(all))/elapsed.Seconds(), len(all), nerr)
 	if len(all) > 0 {
 		fmt.Printf("p50=%v p99=%v p999=%v max=%v\n",
 			percentile(all, 50), percentile(all, 99), percentile(all, 99.9), all[len(all)-1])
+	}
+	if total := len(all) + nerr; nerr*1000 > total {
+		fmt.Fprintf(os.Stderr, "kvbench: %d of %d requests failed (> 0.1%%): results invalid\n", nerr, total)
+		os.Exit(1)
 	}
 }
 
