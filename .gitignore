@@ -1,2 +1,4 @@
 *.wal
 *.exe
+
+.superpowers/
