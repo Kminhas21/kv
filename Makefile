@@ -95,7 +95,7 @@ gke-up: gke-check
 	docker push $(GKE_REPO):$(TAG); \
 	gcloud container clusters get-credentials vmaas --region $(REGION) --project $(PROJECT_ID); \
 	kubectl kustomize k8s/overlays/gke | sed -e 's#__GKE_IMAGE__#$(GKE_REPO)#g' -e 's#__GKE_TAG__#$(TAG)#g' | kubectl apply -f -; \
-	$(MAKE) wait; \
+	$(MAKE) wait KUBECTL=kubectl; \
 	echo "gke-up took $$(( $$(date +%s) - start ))s"
 
 gke-down: gke-check
