@@ -22,7 +22,7 @@ func TestFaultRoutesAbsentByDefault(t *testing.T) {
 }
 
 func TestReadyzUnwritableStore(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff)
+	s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
