@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,9 +23,9 @@ var (
 )
 
 type Entry struct {
-	Value     string
-	Version   uint64
-	ExpiresAt int64 // unix nanoseconds; 0 means the key never expires
+	Value     string `json:"value"`
+	Version   uint64 `json:"version"`
+	ExpiresAt int64  `json:"expires_at,omitempty"` // unix nanoseconds; 0 means the key never expires
 }
 
 // expired reports whether e is past its expiry at now (unix nanoseconds).
@@ -74,9 +75,11 @@ const (
 var errClosed = errors.New("store closed")
 
 // commit is a record waiting for the flusher, and where to send its result.
+// With segment set it is instead a request to switch to that WAL segment.
 type commit struct {
-	rec  walRecord
-	done chan error
+	rec     walRecord
+	segment string
+	done    chan error
 }
 
 type Store struct {
@@ -99,6 +102,13 @@ type Store struct {
 	qmu    sync.Mutex // guards queue and walErr; taken after s.mu, never before
 	queue  []commit
 	walErr error
+
+	// Snapshots (snapshot.go). path and snapEvery are fixed by Open.
+	path      string // WAL_PATH; segment and snapshot names derive from it
+	snapEvery uint64 // SNAPSHOT_EVERY; 0 disables snapshots
+	sinceSnap uint64 // records since the last snapshot; guarded by s.mu
+	snapping  atomic.Bool
+	snapWG    sync.WaitGroup
 }
 
 // NewStore returns a memory-only store (nothing survives a restart).
@@ -106,21 +116,25 @@ func NewStore() *Store {
 	return &Store{data: make(map[string]Entry), now: time.Now}
 }
 
-// Open returns a store backed by the WAL at path, replaying any existing
-// records first. The file is created if it does not exist.
-func Open(path string, mode FsyncMode) (*Store, error) {
+// Open returns a store backed by the WAL at path, loading the snapshot and
+// replaying the WAL segments first. The file is created if it does not
+// exist. Every snapshotEvery records a snapshot is written and older WAL
+// segments are deleted; 0 disables snapshots.
+func Open(path string, mode FsyncMode, snapshotEvery uint64) (*Store, error) {
 	switch mode {
 	case FsyncOff, FsyncAlways, FsyncBatch:
 	default:
 		return nil, fmt.Errorf("unknown WAL fsync mode %q (want off, always or batch)", mode)
 	}
 	s := NewStore()
-	if err := s.replayFile(path); err != nil {
+	s.path, s.snapEvery = path, snapshotEvery
+	current, err := s.load()
+	if err != nil {
 		return nil, err
 	}
 	// Reopened append-only for writing: on Windows an O_APPEND handle cannot
-	// truncate, so replay/repair uses its own read-write handle above.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	// truncate, so replay/repair uses its own read-write handle.
+	f, err := os.OpenFile(current, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open WAL for append: %w", err)
 	}
@@ -138,20 +152,21 @@ func Open(path string, mode FsyncMode) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) replayFile(path string) error {
+func (s *Store) replayFile(path string, after uint64) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return fmt.Errorf("open WAL: %w", err)
 	}
 	defer f.Close()
-	return s.replay(f)
+	return s.replay(f, after)
 }
 
-// replay applies every complete record in f, then truncates a torn final
+// replay applies every complete record in f above revision after (the
+// snapshot already holds the rest), then truncates a torn final
 // line (a crash mid-append) so the next append starts on a clean line.
 // A corrupt line that is followed by more data is real damage, not a torn
 // tail, so it is an error rather than silently skipped.
-func (s *Store) replay(f *os.File) error {
+func (s *Store) replay(f *os.File, after uint64) error {
 	r := bufio.NewReader(f)
 	var good int64
 	for n := 1; ; n++ {
@@ -172,7 +187,10 @@ func (s *Store) replay(f *os.File) error {
 		if rec.Op != opPut && rec.Op != opDelete {
 			return fmt.Errorf("corrupt WAL record on line %d: unknown op %q", n, rec.Op)
 		}
-		s.apply(rec)
+		if rec.Version > after {
+			s.apply(rec)
+			s.sinceSnap++
+		}
 		good += int64(len(line))
 	}
 	info, err := f.Stat()
@@ -184,7 +202,7 @@ func (s *Store) replay(f *os.File) error {
 			return fmt.Errorf("truncate torn WAL tail: %w", err)
 		}
 	}
-	slog.Info("WAL replayed", "keys", len(s.data), "revision", s.revision)
+	slog.Info("WAL replayed", "segment", f.Name(), "keys", len(s.data), "revision", s.revision)
 	return nil
 }
 
@@ -206,6 +224,9 @@ func (s *Store) Close() error {
 		close(s.wake)
 		<-s.flushed
 	}
+	// An in-flight snapshot needed the flusher only for its segment switch,
+	// done by now; wait for it to finish writing so no file is left open.
+	s.snapWG.Wait()
 	prev := s.err()     // a poisoning error, surfaced so shutdown logs show it
 	s.poison(errClosed) // keeps an earlier error; either way walErr is now set
 	err := errors.Join(prev, s.wal.Sync(), s.wal.Close())
@@ -307,6 +328,7 @@ func (s *Store) write(rec walRecord) (<-chan error, error) {
 	if err := s.err(); err != nil {
 		return nil, err
 	}
+	var done chan error
 	if s.wake == nil {
 		// off mode encodes under s.mu: legacy semantics, kept so off is no slower.
 		if s.wal != nil {
@@ -315,18 +337,25 @@ func (s *Store) write(rec walRecord) (<-chan error, error) {
 			}
 		}
 		s.apply(rec)
-		return nil, nil
+	} else {
+		s.apply(rec)
+		done = make(chan error, 1)
+		s.enqueue(commit{rec: rec, done: done})
 	}
-	s.apply(rec)
-	done := make(chan error, 1)
+	s.maybeSnapshot()
+	return done, nil
+}
+
+// enqueue hands c to the flusher. Callers must hold s.mu, so queue order
+// is revision order.
+func (s *Store) enqueue(c commit) {
 	s.qmu.Lock()
-	s.queue = append(s.queue, commit{rec: rec, done: done})
+	s.queue = append(s.queue, c)
 	s.qmu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
 	default: // a wake-up is already pending
 	}
-	return done, nil
 }
 
 // flusher is the only goroutine that writes the WAL in batch/always mode.
@@ -353,11 +382,23 @@ func (s *Store) flushBatch(one bool) bool {
 	if one {
 		n = 1
 	}
+	// A segment switch is committed alone: records queued before it go to
+	// the old segment (and are fsynced there), records after it to the new.
+	for i, c := range s.queue[:n] {
+		if c.segment != "" {
+			n = max(i, 1)
+			break
+		}
+	}
 	batch := s.queue[:n:n]
 	s.queue = s.queue[n:]
 	err := s.walErr
 	s.qmu.Unlock()
 
+	if err == nil && batch[0].segment != "" {
+		batch[0].done <- s.switchSegment(batch[0].segment, true) // fails without poisoning
+		return true
+	}
 	if err == nil {
 		if err = s.commitBatch(batch); err != nil {
 			s.poison(err)

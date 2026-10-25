@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -26,14 +27,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	store, err := kv.Open(walPath, fsync)
+	// 0 disables snapshots: the WAL then grows forever and replays from the start.
+	snapEvery, err := strconv.ParseUint(envOr("SNAPSHOT_EVERY", "100000"), 10, 64)
+	if err != nil {
+		slog.Error("invalid SNAPSHOT_EVERY: want a record count, 0 to disable", "value", os.Getenv("SNAPSHOT_EVERY"))
+		os.Exit(1)
+	}
+
+	store, err := kv.Open(walPath, fsync, snapEvery)
 	if err != nil {
 		slog.Error("open store", "wal", walPath, "err", err)
 		os.Exit(1)
 	}
 	store.StartSweeper(sweepEvery)
 
-	slog.Info("kv listening", "addr", addr, "wal", walPath, "fsync", fsync)
+	slog.Info("kv listening", "addr", addr, "wal", walPath, "fsync", fsync, "snapshot_every", snapEvery)
 	err = serve.Run(ctx, "kv", addr, kv.NewHandler(store))
 	// After Shutdown: normally no handler is left; if the drain timed out, stragglers may remain but the process exits next.
 	if cerr := store.Close(); cerr != nil {

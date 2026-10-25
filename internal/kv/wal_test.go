@@ -9,7 +9,7 @@ import (
 
 func openT(t *testing.T, path string) *Store {
 	t.Helper()
-	s, err := Open(path, FsyncBatch)
+	s, err := Open(path, FsyncBatch, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestWAL_MidFileCorruptionRefusesToOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := Open(path, FsyncBatch)
+	s, err := Open(path, FsyncBatch, 0)
 	if err == nil {
 		s.Close()
 		t.Fatal("Open succeeded on a WAL with mid-file corruption, want error")

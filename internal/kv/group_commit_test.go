@@ -42,7 +42,7 @@ func TestGroupCommit_ConcurrentAcksAreDurableAndReplayed(t *testing.T) {
 				perWriter = 3 // one fsync per write is ~15ms on Windows
 			}
 			path := filepath.Join(t.TempDir(), "kv.wal")
-			s, err := Open(path, mode)
+			s, err := Open(path, mode, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -101,7 +101,7 @@ func TestGroupCommit_ConcurrentAcksAreDurableAndReplayed(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			s, err = Open(path, mode)
+			s, err = Open(path, mode, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -254,7 +254,7 @@ func TestGroupCommit_CloseDrainsInFlightWrites(t *testing.T) {
 }
 
 func TestOpen_RejectsUnknownFsyncMode(t *testing.T) {
-	if s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), "sometimes"); err == nil {
+	if s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), "sometimes", 0); err == nil {
 		s.Close()
 		t.Fatal("Open accepted fsync mode \"sometimes\"")
 	}
@@ -263,7 +263,7 @@ func TestOpen_RejectsUnknownFsyncMode(t *testing.T) {
 func BenchmarkPut(b *testing.B) {
 	for _, mode := range allModes {
 		b.Run(string(mode), func(b *testing.B) {
-			s, err := Open(filepath.Join(b.TempDir(), "kv.wal"), mode)
+			s, err := Open(filepath.Join(b.TempDir(), "kv.wal"), mode, 0)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -16,6 +16,9 @@ data:
   # off | always | batch. batch = group commit: a PUT is answered only after
   # its record is fsynced, and concurrent PUTs share one fsync.
   WAL_FSYNC: "batch"
+  # Snapshot the store and drop older WAL segments every N records
+  # (kv.snap and kv.wal.<revision> appear next to WAL_PATH). 0 disables.
+  SNAPSHOT_EVERY: "100000"
   RECONCILE_INTERVAL: "2s"
   # HV_TIMEOUT must be shorter than HANG_FOR, or a "lost response" would
   # simply be a slow response.
