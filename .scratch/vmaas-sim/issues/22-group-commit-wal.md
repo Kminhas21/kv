@@ -12,7 +12,8 @@
 - [x] The HTTP response is sent only after that writer's batch has been fsynced (`batch`/`always` modes)
 - [x] A failed write or Sync returns an error to every writer in the batch and poisons the store: all later writes fail
 - [x] `Close()` drains the queue and fsyncs before closing the file
-- [x] Tests: concurrent writers all get durable acks; batches really group more than one record under load; an injected Sync failure poisons the store; replay after reopen sees every acknowledged write; `go test -race` clean
+- [x] Tests: concurrent writers all get durable acks; batches really group more than one record under load; an injected Sync failure poisons the store; replay after reopen sees every acknowledged write
+- [ ] `go test -race` clean: pending in CI (GitHub Actions on Linux runs `go test -race ./...`); not runnable on this Windows machine without cgo
 - [x] `testing.B` benchmark of Put in all three modes with `b.RunParallel`; ns/op recorded in the Comments section
 
 **Concepts:** group commit, a reply channel (`chan error`) per request, a single-writer goroutine, `bufio.Writer` + `File.Sync`, why the lock must not cover I/O, durability vs latency.

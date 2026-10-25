@@ -180,8 +180,9 @@ func (s *Store) Close() error {
 		close(s.wake)
 		<-s.flushed
 	}
+	prev := s.err()     // a poisoning error, surfaced so shutdown logs show it
 	s.poison(errClosed) // keeps an earlier error; either way walErr is now set
-	err := errors.Join(s.wal.Sync(), s.wal.Close())
+	err := errors.Join(prev, s.wal.Sync(), s.wal.Close())
 	s.wal = nil
 	return err
 }
@@ -254,6 +255,7 @@ func (s *Store) write(rec walRecord) (<-chan error, error) {
 		return nil, err
 	}
 	if s.wake == nil {
+		// off mode encodes under s.mu: legacy semantics, kept so off is no slower.
 		if s.wal != nil {
 			if err := s.enc.Encode(rec); err != nil {
 				return nil, s.poison(fmt.Errorf("append to WAL: %w", err))

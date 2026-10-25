@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,12 +94,8 @@ func TestGroupCommit_ConcurrentAcksAreDurableAndReplayed(t *testing.T) {
 				if n := syncs.Load(); n != total {
 					t.Errorf("always mode fsynced %d times for %d writes, want one each", n, total)
 				}
-			case FsyncBatch:
-				if n := syncs.Load(); n >= total {
-					t.Errorf("batch mode fsynced %d times for %d writes: nothing was grouped", n, total)
-				} else {
-					t.Logf("%d writes in %d fsyncs (%.1f per batch)", total, n, float64(total)/float64(n))
-				}
+			case FsyncBatch: // grouping is proven deterministically in TestGroupCommit_BatchesQueuedRecords
+				t.Logf("%d writes in %d fsyncs", total, syncs.Load())
 			}
 
 			if err := s.Close(); err != nil {
@@ -114,6 +112,60 @@ func TestGroupCommit_ConcurrentAcksAreDurableAndReplayed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// While the first fsync is held, n writers queue up; once it is released
+// the flusher must commit all n in a single batch with a single fsync.
+func TestGroupCommit_BatchesQueuedRecords(t *testing.T) {
+	const n = 10
+	path := filepath.Join(t.TempDir(), "kv.wal")
+	s := openT(t, path)
+	defer s.Close()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var batchSizes []int // records per fsync; only the flusher appends
+	lines := 0
+	s.syncWAL = func() error {
+		if len(batchSizes) == 0 {
+			close(entered)
+			<-release
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		now := bytes.Count(data, []byte("\n"))
+		batchSizes = append(batchSizes, now-lines)
+		lines = now
+		return s.wal.Sync()
+	}
+
+	put := func(wg *sync.WaitGroup, key string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, _, err := s.Put(key, "x", nil); err != nil {
+				t.Errorf("Put(%s): %v", key, err)
+			}
+		}()
+	}
+	var wg sync.WaitGroup
+	put(&wg, "first")
+	<-entered // the flusher is now stuck inside the first fsync
+	for i := range n {
+		put(&wg, fmt.Sprintf("k%d", i))
+	}
+	for queued := 0; queued < n; runtime.Gosched() {
+		s.qmu.Lock()
+		queued = len(s.queue)
+		s.qmu.Unlock()
+	}
+	close(release)
+	wg.Wait()
+
+	if want := []int{1, n}; !slices.Equal(batchSizes, want) {
+		t.Errorf("records per fsync = %v, want %v", batchSizes, want)
 	}
 }
 
@@ -146,7 +198,9 @@ func TestGroupCommit_SyncFailurePoisonsStore(t *testing.T) {
 	if err := s.Delete("a", nil); err == nil {
 		t.Error("Delete after poisoning succeeded")
 	}
-	s.Close()
+	if err := s.Close(); err == nil || !strings.Contains(err.Error(), "disk on fire") {
+		t.Errorf("Close on a poisoned store err = %v, want the fsync error", err)
+	}
 	s.Close() // a second Close on a poisoned store must not panic
 }
 
@@ -157,6 +211,7 @@ func TestGroupCommit_CloseDrainsInFlightWrites(t *testing.T) {
 	var mu sync.Mutex
 	acked := map[string]uint64{}
 	var count atomic.Int64
+	reached := make(chan struct{}) // closed at the 200th ack
 	var wg sync.WaitGroup
 	for w := range 16 {
 		wg.Add(1)
@@ -174,12 +229,13 @@ func TestGroupCommit_CloseDrainsInFlightWrites(t *testing.T) {
 				mu.Lock()
 				acked[key] = v
 				mu.Unlock()
-				count.Add(1)
+				if count.Add(1) == 200 {
+					close(reached)
+				}
 			}
 		}()
 	}
-	for count.Load() < 200 {
-	}
+	<-reached
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
