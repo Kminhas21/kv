@@ -99,6 +99,7 @@ type Store struct {
 	// Group commit (batch/always). wake is nil in off mode.
 	wake    chan struct{} // cap 1: "the queue is non-empty"
 	flushed chan struct{} // closed when the flusher exits
+	closed  bool          // guarded by mu; Close already ran
 
 	qmu    sync.Mutex // guards queue and walErr; taken after s.mu, never before
 	queue  []commit
@@ -220,9 +221,10 @@ func (s *Store) Close() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.wal == nil {
+	if s.closed {
 		return nil
 	}
+	s.closed = true
 	// Holding s.mu means nothing new can be queued, so the flusher drains
 	// what is there and exits.
 	if s.wake != nil {
@@ -232,6 +234,11 @@ func (s *Store) Close() error {
 	// An in-flight snapshot needed the flusher only for its segment switch,
 	// done by now; wait for it to finish writing so no file is left open.
 	s.snapWG.Wait()
+	// Ownership rule: in batch/always mode the flusher owns wal/enc/bw until
+	// <-s.flushed; before that only the flusher may touch them.
+	if s.wal == nil { // memory-only store
+		return nil
+	}
 	prev := s.err()     // a poisoning error, surfaced so shutdown logs show it
 	s.poison(errClosed) // keeps an earlier error; either way walErr is now set
 	err := errors.Join(prev, s.wal.Sync(), s.wal.Close())
