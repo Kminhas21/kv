@@ -47,6 +47,20 @@ func TestCLI_KVCommands(t *testing.T) {
 	if !strings.Contains(err.Error(), "current version is 1") {
 		t.Errorf("conflict error %q should report the current version", err)
 	}
+
+	if _, err := vmcli("kv", "put", "--ttl", "1h", "tmp", "x"); err != nil {
+		t.Fatalf("kv put --ttl: %v", err)
+	}
+	if out, err := vmcli("kv", "get", "tmp"); err != nil || out != "x\n" {
+		t.Errorf("kv get tmp after put --ttl 1h = %q, %v; want x", out, err)
+	}
+	var ue usageError
+	if _, err := vmcli("kv", "put", "-ttl", "-5s", "neg", "x"); !errors.As(err, &ue) {
+		t.Errorf("kv put -ttl -5s err = %v, want a usage error", err)
+	}
+	if _, err := vmcli("kv", "get", "neg"); !errors.Is(err, kv.ErrNotFound) {
+		t.Errorf("rejected put still wrote the key: get err = %v", err)
+	}
 }
 
 func TestCLI_FaultsChangeOnlyGivenFlags(t *testing.T) {

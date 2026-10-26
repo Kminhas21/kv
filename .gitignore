@@ -1,2 +1,8 @@
 *.wal
 *.exe
+
+.superpowers/
+
+# terraform
+.terraform/
+*.tfstate*

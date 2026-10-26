@@ -115,6 +115,37 @@ func TestClient_UnexpectedStatusIsInspectable(t *testing.T) {
 	}
 }
 
+func TestClient_PutTTLSendsTTLAndIfMatch(t *testing.T) {
+	var gotQuery, gotIfMatch string
+	h := kv.NewHandler(kv.NewStore())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery, gotIfMatch = r.URL.RawQuery, r.Header.Get("If-Match")
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL)
+	ctx := context.Background()
+
+	zero := uint64(0)
+	v, err := c.PutTTL(ctx, "leases/vmctl", "pod-a", &zero, 10*time.Second)
+	if err != nil {
+		t.Fatalf("PutTTL: %v", err)
+	}
+	if gotQuery != "ttl=10s" || gotIfMatch != "0" {
+		t.Errorf("request query=%q If-Match=%q, want ttl=10s and 0", gotQuery, gotIfMatch)
+	}
+	if _, ver, err := c.Get(ctx, "leases/vmctl"); err != nil || ver != v {
+		t.Errorf("Get after PutTTL = v%d, %v; want v%d", ver, err, v)
+	}
+
+	if _, err := c.Put(ctx, "leases/vmctl", "pod-a", &v); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if gotQuery != "" {
+		t.Errorf("plain Put sent query %q, want none (permanent)", gotQuery)
+	}
+}
+
 func TestClient_ContextDeadlineCancelsSlowCall(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

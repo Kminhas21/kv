@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # -race needs cgo; ubuntu runners ship gcc.
+      - run: go test -race ./...
+        env:
+          CGO_ENABLED: "1"
+      # Keeps benchmarks compiling and running without timing anything.
+      - run: go test -run '^$' -bench . -benchtime 1x ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t kv:ci .
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # hashFiles only works at step level (after checkout), so each step is
+      # guarded; the job is a no-op until Terraform lands under infra/ (ticket 29).
+      - uses: hashicorp/setup-terraform@v3
+        if: hashFiles('infra/**/*.tf') != ''
+      - run: terraform fmt -check -recursive infra
+        if: hashFiles('infra/**/*.tf') != ''
+      # No backend/credentials: validate only checks syntax and schema.
+      - if: hashFiles('infra/**/*.tf') != ''
+        run: |
+          for d in infra/envs/*/; do
+            (cd "$d" && terraform init -backend=false -input=false && terraform validate)
+          done

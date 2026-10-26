@@ -17,10 +17,26 @@ type Reconciler struct {
 	repo *Repo
 	hv   Hypervisor
 	now  func() time.Time
+
+	isLeader func() bool                // nil = always reconcile
+	observe  func(time.Duration, error) // nil = no metrics
+}
+
+// Observe reports the duration and outcome of every tick Run executes.
+func (r *Reconciler) Observe(f func(time.Duration, error)) *Reconciler {
+	r.observe = f
+	return r
 }
 
 func NewReconciler(repo *Repo, hv Hypervisor) *Reconciler {
 	return &Reconciler{repo: repo, hv: hv, now: time.Now}
+}
+
+// LeaderOnly makes Run skip every tick for which isLeader returns false, so
+// only the replica holding the lease reconciles. Tick itself is unaffected.
+func (r *Reconciler) LeaderOnly(isLeader func() bool) *Reconciler {
+	r.isLeader = isLeader
+	return r
 }
 
 // Run calls Tick every interval until ctx is cancelled.
@@ -29,12 +45,10 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for {
-		tickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := r.Tick(tickCtx); err != nil {
-			slog.Error("reconcile tick failed", "err", err)
+	for ctx.Err() == nil { // never start a new tick once shutting down
+		if r.isLeader == nil || r.isLeader() {
+			r.runTick(ctx)
 		}
-		cancel()
 
 		select {
 		case <-ctx.Done():
@@ -43,6 +57,22 @@ func (r *Reconciler) Run(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// runTick runs one Tick. A tick that started as leader may finish after
+// leadership is lost: it is bounded at 8s and every write is compare-and-swap.
+func (r *Reconciler) runTick(ctx context.Context) {
+	// Detached from ctx so a shutdown lets the tick finish; 8s fits serve.ShutdownTimeout.
+	tickCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
+	start := time.Now()
+	err := r.Tick(tickCtx)
+	if r.observe != nil {
+		r.observe(time.Since(start), err)
+	}
+	if err != nil {
+		slog.Error("reconcile tick failed", "err", err)
+	}
+	cancel()
 }
 
 // Tick makes one pass over all VMs. Tests call it directly instead of Run,
