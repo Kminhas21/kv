@@ -18,6 +18,10 @@ spec:
       app: kv
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
       labels:
         app: kv
     spec:
@@ -25,7 +29,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
         fsGroup: 65532
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 15
       containers:
         - name: kv
           image: vmaas-sim:dev
@@ -40,15 +44,27 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          # Startup: liveness/readiness stay off until this first succeeds, for
+          # up to 2s x 30 = 60s of slack (kv replays its WAL before listening). A replay longer than about 60s
+          # fails the startup probe and crash-loops the pod; raise failureThreshold
+          # if the WAL ever grows that large.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
           # Liveness: "is the process stuck?" Failing it restarts the container.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
-            periodSeconds: 10
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           # Readiness: "should it receive traffic?" Failing it removes the pod
           # from the Service's endpoints without restarting it.
           readinessProbe:
             httpGet: { path: /readyz, port: http }
-            periodSeconds: 5
+            periodSeconds: 2
+            failureThreshold: 2
+            timeoutSeconds: 1
           # Requests are what the Kubernetes scheduler reserves on a node (like
           # our host reservations); limits are the hard ceiling. Exceeding the
           # memory limit gets the container OOM-killed; CPU is only throttled.

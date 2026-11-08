@@ -1,0 +1,17 @@
+# Local kind: the base plus fault injection (image vmaas-sim:dev is loaded
+# with `kind load`).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  # Prometheus + Grafana: kind only (GKE would use Managed Prometheus).
+  - ../../monitoring
+# FAULTS=1 enables kv's /debug/crash and /debug/hang for the self-heal demo.
+# kind only: never in base or gke.
+patches:
+  - target: { kind: StatefulSet, name: kv }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - { name: FAULTS, value: "1" }

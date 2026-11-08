@@ -1,13 +1,117 @@
 package kv
 
 import (
+	"errors"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestFaultRoutesAbsentByDefault(t *testing.T) {
+	t.Setenv("FAULTS", "") // don't inherit it from the caller's environment
+	do := newTestServer(t)
+	for _, p := range []string{"/debug/crash", "/debug/hang"} {
+		if got := do("POST", p, "", "").StatusCode; got != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", p, got)
+		}
+	}
+}
+
+func TestReadyzUnwritableStore(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(NewHandler(s))
+	defer srv.Close()
+	readyz := func() int {
+		resp, err := http.Get(srv.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := readyz(); got != http.StatusOK {
+		t.Fatalf("readyz = %d, want 200", got)
+	}
+	s.Close()
+	if got := readyz(); got != http.StatusServiceUnavailable {
+		t.Fatalf("readyz after Close = %d, want 503", got)
+	}
+}
+
+func TestHealthzFailsWhenPoisonedNotWhenClosed(t *testing.T) {
+	healthz := func(s *Store) int {
+		rec := httptest.NewRecorder()
+		NewHandler(s).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+		return rec.Code
+	}
+	open := func() *Store {
+		s, err := Open(filepath.Join(t.TempDir(), "kv.wal"), FsyncOff, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := open()
+	if got := healthz(s); got != http.StatusOK {
+		t.Fatalf("healthz = %d, want 200", got)
+	}
+	s.Close()
+	if got := healthz(s); got != http.StatusOK {
+		t.Fatalf("healthz after Close = %d, want 200", got)
+	}
+	p := open()
+	defer p.Close()
+	p.poison(errors.New("disk on fire"))
+	if got := healthz(p); got != http.StatusServiceUnavailable {
+		t.Fatalf("healthz on poisoned store = %d, want 503", got)
+	}
+}
+
+func TestHangBlocksHealthz(t *testing.T) {
+	t.Setenv("FAULTS", "1")
+	srv := httptest.NewServer(NewHandler(NewStore()))
+	defer srv.Close()
+	c := &http.Client{Timeout: 300 * time.Millisecond}
+	if resp, err := c.Get(srv.URL + "/healthz"); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz before hang: %v", err)
+	}
+	if resp, err := c.Post(srv.URL+"/debug/hang", "", nil); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("hang: %v", err)
+	}
+	if _, err := c.Get(srv.URL + "/healthz"); err == nil {
+		t.Fatal("healthz answered after hang, want timeout")
+	}
+}
+
+// A hung PUT must still notice its client giving up, or a liveness restart
+// waits out the whole drain timeout. Go only watches for a closed connection
+// once the request body has been read.
+func TestHangReleasesPUTWhenClientGivesUp(t *testing.T) {
+	t.Setenv("FAULTS", "1")
+	srv := httptest.NewServer(NewHandler(NewStore())) // no Close: it would block on a stuck handler
+	c := &http.Client{Timeout: 200 * time.Millisecond}
+	if resp, err := c.Post(srv.URL+"/debug/hang", "", nil); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("hang: %v", err)
+	}
+	req, _ := http.NewRequest("PUT", srv.URL+"/keys/a", strings.NewReader("value"))
+	if _, err := c.Do(req); err == nil {
+		t.Fatal("PUT answered after hang, want timeout")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Config.Shutdown(ctx); err != nil {
+		t.Fatalf("drain after the client gave up: %v (hung PUT handler never returned)", err)
+	}
+}
 
 // newTestServer starts the kv handler on a real local port and returns a
 // helper that sends one request with optional If-Match.

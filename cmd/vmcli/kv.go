@@ -55,11 +55,15 @@ func (a *app) kvCmd(ctx context.Context, args []string) error {
 		fs := flag.NewFlagSet("put", flag.ContinueOnError)
 		var ifMatch versionFlag
 		fs.Var(&ifMatch, "if-match", "only write if the key is at this version (0 = create only)")
-		pos, err := parseSub(fs, args, 2, 2, "kv put [-if-match N] <key> <value>")
+		ttl := fs.Duration("ttl", 0, "expire the key after this long, e.g. 30s (default: never)")
+		pos, err := parseSub(fs, args, 2, 2, "kv put [-if-match N] [-ttl D] <key> <value>")
 		if err != nil {
 			return err
 		}
-		ver, err := a.kv.Put(ctx, pos[0], pos[1], ifMatch.v)
+		if *ttl < 0 {
+			return usageError{fmt.Sprintf("kv put: -ttl must not be negative, got %v", *ttl)}
+		}
+		ver, err := a.kv.PutTTL(ctx, pos[0], pos[1], ifMatch.v, *ttl)
 		if errors.Is(err, kv.ErrConflict) {
 			return fmt.Errorf("%w (current version is %d)", err, ver)
 		}

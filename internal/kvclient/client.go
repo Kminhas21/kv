@@ -79,7 +79,17 @@ func (c *Client) Get(ctx context.Context, key string) (value string, ver uint64,
 // ifMatch, a version mismatch returns kv.ErrConflict together with the
 // key's current version (0 if it does not exist).
 func (c *Client) Put(ctx context.Context, key, value string, ifMatch *uint64) (uint64, error) {
-	resp, err := c.do(ctx, http.MethodPut, keyPath(key), strings.NewReader(value), ifMatch)
+	return c.PutTTL(ctx, key, value, ifMatch, 0)
+}
+
+// PutTTL is Put with a TTL: the key expires ttl after the server applies
+// the write, and every write resets it. ttl <= 0 makes the key permanent.
+func (c *Client) PutTTL(ctx context.Context, key, value string, ifMatch *uint64, ttl time.Duration) (uint64, error) {
+	path := keyPath(key)
+	if ttl > 0 {
+		path += "?ttl=" + url.QueryEscape(ttl.String())
+	}
+	resp, err := c.do(ctx, http.MethodPut, path, strings.NewReader(value), ifMatch)
 	if err != nil {
 		return 0, err
 	}

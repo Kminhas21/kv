@@ -1,0 +1,14 @@
+# Prometheus + Grafana for the local kind cluster only (included by
+# overlays/kind). GKE would use Google Managed Prometheus instead.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - prometheus.yaml
+  - grafana.yaml
+configMapGenerator:
+  - name: grafana-dashboards
+    namespace: vmaas
+    files:
+      - vmaas.json=dashboard.json
+generatorOptions:
+  disableNameSuffixHash: true

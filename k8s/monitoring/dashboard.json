@@ -1,0 +1,49 @@
+{
+  "uid": "vmaas",
+  "title": "vmaas-sim",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "kv request rate by route (req/s)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{route}}", "expr": "sum by (route) (rate(http_request_duration_seconds_count[1m]))" }]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "kv request p99 latency by route",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{route}}", "expr": "histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket[1m])))" }]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "WAL fsync p99",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "fsync p99", "expr": "histogram_quantile(0.99, sum by (le) (rate(wal_fsync_duration_seconds_bucket[1m])))" }]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "average records per WAL batch",
+      "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+      "targets": [{ "refId": "A", "legendFormat": "records/batch", "expr": "sum(rate(wal_batch_records_sum[1m])) / sum(rate(wal_batch_records_count[1m]))" }]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "kv_keys",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "targets": [{ "refId": "A", "legendFormat": "{{pod}}", "expr": "kv_keys" }]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "reconcile ticks/s by result",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "legendFormat": "{{result}}", "expr": "sum by (result) (rate(reconcile_total[1m]))" }]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "vmctl leader (1 = leader), by pod",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "custom": { "lineInterpolation": "stepAfter" } }, "overrides": [] },
+      "targets": [{ "refId": "A", "legendFormat": "{{pod}}", "expr": "leader" }]
+    }
+  ]
+}

@@ -23,6 +23,7 @@ type system struct {
 	svc  *vm.Service
 	hv   *mockhv.Hypervisor
 	hvc  *hvclient.Client
+	kvc  *kvclient.Client
 }
 
 const hvTimeout = 200 * time.Millisecond
@@ -35,11 +36,12 @@ func newSystem(t *testing.T) *system {
 	hvSrv := httptest.NewServer(hv.Handler())
 	t.Cleanup(hvSrv.Close)
 
-	repo := vm.NewRepo(kvclient.New(kvSrv.URL))
+	kvc := kvclient.New(kvSrv.URL)
+	repo := vm.NewRepo(kvc)
 	if err := vm.SeedHosts(context.Background(), repo, vm.DefaultHosts()); err != nil {
 		t.Fatal(err)
 	}
-	return &system{t: t, repo: repo, svc: vm.NewService(repo), hv: hv, hvc: hvclient.New(hvSrv.URL, hvTimeout)}
+	return &system{t: t, repo: repo, svc: vm.NewService(repo), hv: hv, hvc: hvclient.New(hvSrv.URL, hvTimeout), kvc: kvc}
 }
 
 // newReconciler is a fresh controller with no memory of its own, exactly
@@ -238,5 +240,20 @@ func TestHVClient_ClassifiesRejection(t *testing.T) {
 	}
 	if _, err := s.hvc.GetTask(context.Background(), "task-nope"); !errors.Is(err, vm.ErrProviderNotFound) {
 		t.Fatalf("unknown task err = %v, want ErrProviderNotFound", err)
+	}
+}
+
+func TestReconciler_RunReturnsWhenContextCancelled(t *testing.T) {
+	s := newSystem(t)
+	s.create("web-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.newReconciler().Run(ctx, 10*time.Millisecond); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
 	}
 }

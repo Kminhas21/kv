@@ -7,7 +7,7 @@ WORKDIR /src
 
 # Dependencies first, source second: Docker caches each step, so editing a
 # .go file does not re-run the module download layer.
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .

@@ -1,4 +1,4 @@
-# `kubectl apply -k k8s/` applies everything listed here, in this order.
+# Shared workloads. Overlays (kind, gke) layer environment differences on top.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
